@@ -1,6 +1,6 @@
 _A[0-9]\.[0-9][0-9]\.xyz
 A[0-9]\.[0-9]\.xyz
-mc_growth.exe *.o
+mc_growth.exe 
 _A[0-9]\.[0-9][0-9]\.xyz
 A[0-9]\.[0-9][0-9]\.xyz
 _initial.xyz
