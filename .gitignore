@@ -1,0 +1,9 @@
+_A[0-9]\.[0-9][0-9]\.xyz
+A[0-9]\.[0-9]\.xyz
+mc_growth.exe *.o
+_A[0-9]\.[0-9][0-9]\.xyz
+A[0-9]\.[0-9][0-9]\.xyz
+_initial.xyz
+*.o
+log.txt
+defects.txt
