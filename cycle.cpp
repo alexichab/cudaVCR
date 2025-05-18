@@ -21,9 +21,9 @@ void main_loop(void) { // бесконечный цикл, состоящий и
   double t;
 	float T;
 
-  printf("main_loop: starting, experiment_ML=%.2f\n", param.experiment_ML);
+  //printf("main_loop: starting, experiment_ML=%.2f\n", param.experiment_ML);
     ML_deposited = current.n_deposited / (Lx * Ly / 8.);
-  printf("main_loop: initial ML_deposited=%.2f, n_deposited=%d\n", ML_deposited, current.n_deposited);
+  //printf("main_loop: initial ML_deposited=%.2f, n_deposited=%d\n", ML_deposited, current.n_deposited);
   ML_next_control = param.dML_control * ((int) (ML_deposited / param.dML_control));// the last control check
 
   // если исходная структура без смещений и планируется моделирование роста, то 1000 раз пересчитываем смещения всех атомов
@@ -39,7 +39,7 @@ void main_loop(void) { // бесконечный цикл, состоящий и
     }
 		ZXY v_ochered_Edef(x,y,z);
 		update_Edef();
-    printf("main_loop: displacements initialized, spisok_atomov.size=%zu\n", spisok_atomov.size());
+    //printf("main_loop: displacements initialized, spisok_atomov.size=%zu\n", spisok_atomov.size());
 	}
 
 
@@ -127,11 +127,10 @@ void main_loop(void) { // бесконечный цикл, состоящий и
   
 // main loop
   while (1) { // и запустим цикл
-    printf("main_loop: step=%d, ML_deposited=%.2f, t=%.2e, n_deposited=%d, spisok_atomov.size=%zu\n",
-      step, ML_deposited, current.t, current.n_deposited, spisok_atomov.size());
+    //printf("main_loop: step=%d, ML_deposited=%.2f, t=%.2e, n_deposited=%d, spisok_atomov.size=%zu\n",step, ML_deposited, current.t, current.n_deposited, spisok_atomov.size());
 
   if (ML_deposited >= ML_next_control) {
-    printf("main_loop: writing log at ML_deposited=%.2f\n", ML_deposited);
+    //printf("main_loop: writing log at ML_deposited=%.2f\n", ML_deposited);
       read_control("control.txt");
       write_to_log("log.txt");
       ML_next_control += param.dML_control;
@@ -139,7 +138,7 @@ void main_loop(void) { // бесконечный цикл, состоящий и
 
 	if(param.show_short != 0)
 		if(ML_deposited >= show_short) {
-      printf("main_loop: writing show_short at ML_deposited=%.2f\n", ML_deposited);
+      //printf("main_loop: writing show_short at ML_deposited=%.2f\n", ML_deposited);
 			sprintf(filename,"A%.2f.xyz",show_short);
 			show_me(filename,0);
 			comp.notify(filename);
@@ -157,7 +156,7 @@ void main_loop(void) { // бесконечный цикл, состоящий и
 		
 	if(param.show_sum != 0)
 		if(ML_deposited >= show_sum) {
-      printf("main_loop: writing show_sum at ML_deposited=%.2f\n", ML_deposited);
+      //printf("main_loop: writing show_sum at ML_deposited=%.2f\n", ML_deposited);
 			sprintf(filename,"__A%.2f.xyz",show_sum);
 			show_me(filename,2);
 			comp.notify(filename);
@@ -165,12 +164,12 @@ void main_loop(void) { // бесконечный цикл, состоящий и
 		}
 
   if (ML_deposited>=param.experiment_ML) {
-    printf("main_loop: experiment_ML reached, exiting\n");
+    //printf("main_loop: experiment_ML reached, exiting\n");
     break;
   }
 		
     mc_step();
-    printf("main_loop: after mc_step, n_deposited=%d, t=%.2e\n", current.n_deposited, current.t);
+    //printf("main_loop: after mc_step, n_deposited=%d, t=%.2e\n", current.n_deposited, current.t);
 //	was 1 per 1e-6 s (mjus) at 670K
 	if(current.t-t>=param.time_for_moves){	// calculate displacements per param.time_for_moves seconds
     printf("main_loop: calling do_many_axyz\n");
@@ -205,40 +204,40 @@ void main_loop(void) { // бесконечный цикл, состоящий и
 	comp.notify(filename);
   }
 */
-printf("main_loop: finished\n");
+//printf("main_loop: finished\n");
 }
 
 
 void mc_step(void) { // шаг Монте-Карло
   double P_jump_sum,P_total,Px,dt;
   int x,y,z,dir,select,res,x2,y2,z2;
-  printf("mc_step: starting\n");
+  //printf("mc_step: starting\n");
     update_Edef(); // приводим энергии деформ. и вероятности прыжков в соответствие с текущим положением
     
     P_jump_sum=calc_P_jump_sum(); // сосчитаем суммарную вероятность всех прыжков
-    printf("mc_step: P_jump_sum=%.2e\n", P_jump_sum);
+    //printf("mc_step: P_jump_sum=%.2e\n", P_jump_sum);
     
     P_total=P_jump_sum+param.p_deposition;
     Px=P_total*rand01();  // выберем, что делать - прыжок или осаждение
 
-    printf("mc_step: P_total=%.2e, Px=%.2e, p_deposition=%.2e\n", P_total, Px, param.p_deposition);
+    //printf("mc_step: P_total=%.2e, Px=%.2e, p_deposition=%.2e\n", P_total, Px, param.p_deposition);
     if (Px<param.p_deposition) { // делаем осаждение
       select=1;
-      printf("mc_step: attempting deposition\n");
+      //printf("mc_step: attempting deposition\n");
       res=deposition(param.dep_type,&x,&y,&z);
-      printf("mc_step: deposition res=%d, x=%d, y=%d, z=%d\n", res, x, y, z);
+      //printf("mc_step: deposition res=%d, x=%d, y=%d, z=%d\n", res, x, y, z);
     }
     else {                       // или делаем прыжок
       select=2;
-      printf("mc_step: attempting jump\n");
+      //printf("mc_step: attempting jump\n");
       choose_jump(P_jump_sum,&x,&y,&z,&dir); // выберем, какой прыжок
       res=jump(x,y,z,dir,&x2,&y2,&z2);       // и выполним его
-      printf("mc_step: jump res=%d, from (%d,%d,%d) dir=%d to (%d,%d,%d)\n", res, x, y, z, dir, x2, y2, z2);
+      //printf("mc_step: jump res=%d, from (%d,%d,%d) dir=%d to (%d,%d,%d)\n", res, x, y, z, dir, x2, y2, z2);
     }
     dt=-log(rand01())/P_total;   // обновим время
     current.t+=dt;
 
-    printf("mc_step: dt=%.2e, current.t=%.2e\n", dt, current.t);
+    //printf("mc_step: dt=%.2e, current.t=%.2e\n", dt, current.t);
 
     // сделаем "шевеления" атомов после прыжка или осаждения
 //    if (select==1 && res==1) do_many_axyz(x,y,z); 
@@ -252,8 +251,8 @@ void mc_step(void) { // шаг Монте-Карло
       if (x2==current.prev_x && y2==current.prev_y && z2==current.prev_z) current.n_jumps_back++;
       current.prev_x=x; current.prev_y=y; current.prev_z=z;
     }
-    printf("mc_step: n_deposited=%d, n_jumps=%d, n_bad_jumps=%d\n",
-      current.n_deposited, current.n_jumps, current.n_bad_jumps);
+    //printf("mc_step: n_deposited=%d, n_jumps=%d, n_bad_jumps=%d\n",
+      //current.n_deposited, current.n_jumps, current.n_bad_jumps);
     
 //    if (select==1 && res==1) printf("                            %d   %d   %d.\n",x,y,z);
     //if (select==2 && res==0) printf("(%d %d %d) -> (%d %d %d) - otmenen\n",x,y,z,x2,y2,z2);
@@ -340,22 +339,48 @@ void do_many_axyz(int x0, int y0, int z0) {  // сделать "шевелени
 // }
 void do_many_axyz(void) {
   int I = (int)(param.moves_percent / 100. * spisok_atomov.size());
-  printf("do_many_axyz: I=%d, spisok_atomov.size=%zu\n", I, spisok_atomov.size());
+  //printf("do_many_axyz: I=%d, spisok_atomov.size=%zu\n", I, spisok_atomov.size());
   if (I == 0) {
-    printf("do_many_axyz: no atoms to update\n");
-    return;
-}
+      printf("do_many_axyz: no atoms to update\n");
+      return;
+  }
+  if (I < 0 || I > spisok_atomov.size()) {
+      printf("do_many_axyz: invalid I=%d, spisok_atomov.size=%zu\n", I, spisok_atomov.size());
+      exit(1);
+  }
   struct coord* atoms_to_update = new struct coord[I];
+  if (!atoms_to_update) {
+      printf("do_many_axyz: failed to allocate atoms_to_update\n");
+      exit(1);
+  }
   for (int i = 0; i < I; i++) {
       int n = random_(spisok_atomov.size());
+      if (n < 0 || n >= spisok_atomov.size()) {
+          printf("do_many_axyz: invalid index n=%d, spisok_atomov.size=%zu\n", n, spisok_atomov.size());
+          delete[] atoms_to_update;
+          exit(1);
+      }
       atoms_to_update[i] = spisok_atomov[n];
-      printf("do_many_axyz: atom %d: x=%d, y=%d, z=%d\n",
-        i, atoms_to_update[i].x, atoms_to_update[i].y, atoms_to_update[i].z);
+      //printf("do_many_axyz: atom %d: x=%d, y=%d, z=%d\n",i, atoms_to_update[i].x, atoms_to_update[i].y, atoms_to_update[i].z);
+      // Проверка координат
+      if (atoms_to_update[i].x < 0 || atoms_to_update[i].x >= Lx ||
+          atoms_to_update[i].y < 0 || atoms_to_update[i].y >= Ly ||
+          atoms_to_update[i].z < 0 || atoms_to_update[i].z >= Lz) {
+          //printf("do_many_axyz: invalid coordinates at index %d: x=%d, y=%d, z=%d\n", i, atoms_to_update[i].x, atoms_to_update[i].y, atoms_to_update[i].z);
+          delete[] atoms_to_update;
+          exit(1);
+      }
   }
   printf("do_many_axyz: calling cuda_do_many_axyz\n");
+  // Проверка входных указателей
+  if (!atoms.lat || !AA_ || !BB || !transform_array) {
+      //printf("do_many_axyz: null pointer detected: atoms.lat=%p, AA_=%p, BB=%p, transform_array=%p\n", atoms.lat, AA_, BB, transform_array);
+      delete[] atoms_to_update;
+      exit(1);
+  }
   cuda_do_many_axyz(atoms_to_update, I, atoms.lat, Lx, Ly, Lz, param.T,
-    &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
+                    &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
   current.n_moves += I;
-  printf("do_many_axyz: finished, n_moves=%ld\n", current.n_moves);
+  printf("do_many_axyz: finished, n_moves=%f\n", current.n_moves);
   delete[] atoms_to_update;
 }
