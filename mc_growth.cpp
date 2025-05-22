@@ -1,6 +1,7 @@
 #include <ctype.h>
 #include "mc_growth.h"
 #include "compress.h"
+#include "cuda_kernels.h"
 
 //------- глобальные переменные и массивы -------------
 
@@ -151,16 +152,27 @@ int main(int argc, char** argv) {
     sprintf(filename,"_initial.xyz");
     show_me(filename,true);
     comp.notify(filename);
+    int max_atoms = spisok_atomov.size() > 0 ? spisok_atomov.size() : 10000;
+    //cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0], max_atoms);
+    //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
     printf("initial show_me - OK\n\n");
   }else{  
     load_initial_structure(param.load);
     printf("load_initial_structure - OK.\n");
+    printf("main: spisok_atomov.size=%zu\n", spisok_atomov.size());
+  
+    int max_atoms = spisok_atomov.size() > 0 ? spisok_atomov.size() : 10000;
+    printf("main: sizeof(atom_t)=%zu, spisok_atomov.size=%zu\n", sizeof(atom_t), spisok_atomov.size());
+    //cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0],max_atoms);
+    //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
+    printf("main: cuda_init done, max_atoms=%d\n", max_atoms);
   }
+  
 
 	if(current.n_deposited==0)  write_params_to_log("log.txt");
-  
+  cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0], spisok_atomov.size());
   main_loop();
-  
+  cuda_cleanup();
   comp.finish();
   printf("Finished successfully.\n");
 
