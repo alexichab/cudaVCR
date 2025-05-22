@@ -3,7 +3,7 @@ NVCC = nvcc
 
 CXXFLAGS = -g -O2 -msse2 -msse3 -msse4 -mmmx
 #CXXFLAGS = -g -msse2 -msse3 -msse4 -mmmx
-NVCCFLAGS =  -std=c++17 -ccbin /usr/bin/g++ -g -G -O2 -arch=sm_75 -Xcompiler="-fopenmp" --ptxas-options=-v
+NVCCFLAGS =  -std=c++17 -ccbin /usr/bin/g++ -maxrregcount=64 -g -G -O2 -arch=sm_75 -Xcompiler="-fopenmp" --ptxas-options=-v
 
 CUDA_LIBS = -lcudart -L/usr/local/cuda/lib64
 CUDA_INC = -I/usr/local/cuda/include
