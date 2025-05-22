@@ -1,6 +1,7 @@
   #include "mc_growth.h" 
   #include <algorithm>
   #include <random>
+  #include "cuda_kernels.h"
 
 
 
@@ -172,7 +173,7 @@ void main_loop(void) { // бесконечный цикл, состоящий и
     //printf("main_loop: after mc_step, n_deposited=%d, t=%.2e\n", current.n_deposited, current.t);
 //	was 1 per 1e-6 s (mjus) at 670K
 	if(current.t-t>=param.time_for_moves){	// calculate displacements per param.time_for_moves seconds
-    printf("main_loop: calling do_many_axyz\n");
+    //printf("main_loop: calling do_many_axyz\n");
     do_many_axyz();
 	  t=current.t;
 	}
@@ -213,7 +214,7 @@ void mc_step(void) { // шаг Монте-Карло
   int x,y,z,dir,select,res,x2,y2,z2;
   //printf("mc_step: starting\n");
     update_Edef(); // приводим энергии деформ. и вероятности прыжков в соответствие с текущим положением
-    
+    //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
     P_jump_sum=calc_P_jump_sum(); // сосчитаем суммарную вероятность всех прыжков
     //printf("mc_step: P_jump_sum=%.2e\n", P_jump_sum);
     
@@ -225,15 +226,19 @@ void mc_step(void) { // шаг Монте-Карло
       select=1;
       //printf("mc_step: attempting deposition\n");
       res=deposition(param.dep_type,&x,&y,&z);
+      cudaMemcpy(dev_atoms, atoms.lat, Lx * Ly * Lz * sizeof(atom_t), cudaMemcpyHostToDevice);
       //printf("mc_step: deposition res=%d, x=%d, y=%d, z=%d\n", res, x, y, z);
     }
     else {                       // или делаем прыжок
       select=2;
       //printf("mc_step: attempting jump\n");
+      //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
       choose_jump(P_jump_sum,&x,&y,&z,&dir); // выберем, какой прыжок
       res=jump(x,y,z,dir,&x2,&y2,&z2);       // и выполним его
+      cudaMemcpy(dev_atoms, atoms.lat, Lx * Ly * Lz * sizeof(atom_t), cudaMemcpyHostToDevice);
       //printf("mc_step: jump res=%d, from (%d,%d,%d) dir=%d to (%d,%d,%d)\n", res, x, y, z, dir, x2, y2, z2);
     }
+    //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
     dt=-log(rand01())/P_total;   // обновим время
     current.t+=dt;
 
@@ -338,6 +343,21 @@ void do_many_axyz(int x0, int y0, int z0) {  // сделать "шевелени
 //   }
 // }
 void do_many_axyz(void) {
+  // printf("do_many_axyz: checking spisok_atomov before processing\n");
+  // size_t empty_count = 0;
+  // for (size_t i = 0; i < spisok_atomov.size(); i++) {
+  //     int x = spisok_atomov[i].x;
+  //     int y = spisok_atomov[i].y;
+  //     int z = spisok_atomov[i].z;
+  //     int atom_idx = z * Lx * Ly + y * Lx + x;
+  //     if (atoms.lat[atom_idx].type == 0) {
+  //         empty_count++;
+  //         printf("spisok_atomov[%zu]: (%d,%d,%d): type=%d, config=%u\n",
+  //                i, x, y, z, atoms.lat[atom_idx].type, atoms.lat[atom_idx].config);
+  //     }
+  // }
+  // printf("do_many_axyz: found %zu empty atoms in spisok_atomov\n", empty_count);
+
   int I = (int)(param.moves_percent / 100. * spisok_atomov.size());
   //printf("do_many_axyz: I=%d, spisok_atomov.size=%zu\n", I, spisok_atomov.size());
   if (I == 0) {
@@ -349,10 +369,6 @@ void do_many_axyz(void) {
       exit(1);
   }
   struct coord* atoms_to_update = new struct coord[I];
-  if (!atoms_to_update) {
-      printf("do_many_axyz: failed to allocate atoms_to_update\n");
-      exit(1);
-  }
   for (int i = 0; i < I; i++) {
       int n = random_(spisok_atomov.size());
       if (n < 0 || n >= spisok_atomov.size()) {
@@ -361,25 +377,17 @@ void do_many_axyz(void) {
           exit(1);
       }
       atoms_to_update[i] = spisok_atomov[n];
-      //printf("do_many_axyz: atom %d: x=%d, y=%d, z=%d\n",i, atoms_to_update[i].x, atoms_to_update[i].y, atoms_to_update[i].z);
-      // Проверка координат
-      if (atoms_to_update[i].x < 0 || atoms_to_update[i].x >= Lx ||
-          atoms_to_update[i].y < 0 || atoms_to_update[i].y >= Ly ||
-          atoms_to_update[i].z < 0 || atoms_to_update[i].z >= Lz) {
-          //printf("do_many_axyz: invalid coordinates at index %d: x=%d, y=%d, z=%d\n", i, atoms_to_update[i].x, atoms_to_update[i].y, atoms_to_update[i].z);
-          delete[] atoms_to_update;
-          exit(1);
-      }
+      //printf("do_many_axyz: atom %d: x=%d, y=%d, z=%d\n", i, atoms_to_update[i].x, atoms_to_update[i].y, atoms_to_update[i].z);
   }
+
   printf("do_many_axyz: calling cuda_do_many_axyz\n");
-  // Проверка входных указателей
-  if (!atoms.lat || !AA_ || !BB || !transform_array) {
-      //printf("do_many_axyz: null pointer detected: atoms.lat=%p, AA_=%p, BB=%p, transform_array=%p\n", atoms.lat, AA_, BB, transform_array);
+  if (!atoms.lat) {
+      printf("do_many_axyz: null pointer detected\n");
       delete[] atoms_to_update;
       exit(1);
   }
-  cuda_do_many_axyz(atoms_to_update, I, atoms.lat, Lx, Ly, Lz, param.T,
-                    &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
+
+  cuda_do_many_axyz(atoms_to_update, I, atoms.lat, Lx, Ly, Lz, param.T, nullptr, nullptr, nullptr);
   current.n_moves += I;
   printf("do_many_axyz: finished, n_moves=%f\n", current.n_moves);
   delete[] atoms_to_update;
