@@ -34,6 +34,11 @@ struct coord {
 };
 #endif
 
+struct neighbor_coords {
+    int x2[16];
+    int y2[16];
+    int z2[16];
+};
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,9 +77,9 @@ void calc_x2y2z2(int x, int y, int z, int dir, int* x2, int* y2, int* z2);
 
 extern "C" {
   __global__ void setup_kernel(curandState* state, unsigned long seed);
-  void cuda_do_many_axyz(struct coord* atoms_to_update, int count, atom_t* host_atoms, 
-                         int Lx, int Ly, int Lz, float T, float* host_AA_, float* host_BB, 
-                         float* host_transform_array);
+  void cuda_do_many_axyz(struct coord* atoms_to_update, int count, atom_t* host_atoms,
+                                  int Lx, int Ly, int Lz, float T, float* host_AA_, float* host_BB,
+                                  float* host_transform_array);
   }
 
 extern int Lx, Ly, Lz;
@@ -221,7 +226,8 @@ static inline void boundary(int &x, int &y, int &z) { // изменить (x,y,z
   }
 }
 
-
+void verify_accuracy(); // Функция для проверки точности вычислений
+//int get_atom_idx_host(int x, int y, int z, int Lx, int Ly, int Lz);
 void v_ochered_Edef(int x, int y, int z); // поставить атом (x,y,z) в очередь на обновление Edef
 void update_Edef(); // обновить Edef для атомов, поставленных в очередь
 void fill_nb_type(int* nb_type, unsigned short int config_);
