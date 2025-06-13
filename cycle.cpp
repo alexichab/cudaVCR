@@ -372,9 +372,17 @@ void do_many_axyz(void) {
   //verify_accuracy();
 
   struct coord* atoms_to_update = new struct coord[I];
+  int count = 0; // Счетчик найденных "хороших" атомов
+
   for (int i = 0; i < I; i++) {
-      int n = random_(spisok_atomov.size());
-      atoms_to_update[i] = spisok_atomov[n];
+      struct coord c;
+      // Ищем атом с типом не равным 0
+      do {
+          int n = random_(spisok_atomov.size());
+          c = spisok_atomov[n];
+      } while (atoms(c.x, c.y, c.z).type == 0);
+      
+      atoms_to_update[i] = c;
   }
 
   cuda_do_many_axyz(atoms_to_update, I, atoms.lat, Lx, Ly, Lz, param.T, &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
