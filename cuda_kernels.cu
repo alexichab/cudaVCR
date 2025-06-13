@@ -9,25 +9,28 @@ atom_t* dev_atoms_write = nullptr;
 float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
 curandState* dev_states = nullptr;
 static int max_count = 0;
-    auto start = std::chrono::high_resolution_clock::now();
+static double total_cuda_time_ms = 0.0;
 
 __host__ __device__ void convert(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
-    lx = x; ly = ((y >> 2) << 1) + ((y & 0x3) >> 1); lz = z >> 2;
+    lx = x;
+    ly = ((y >> 2) << 1) + ((y & 0x3) >> 1);
+    lz = z;
 }
 __host__ __device__ int get_atom_idx(int x, int y, int z, int Lx, int Ly, int Lz) {
-    int lx, ly, lz; convert(x, y, z, Lx, Ly, lx, ly, lz);
-    return lz * (Lx * (Ly / 2)) + ly * Lx + lx;
+    int lx, ly, lz;
+    convert(x, y, z, Lx, Ly, lx, ly, lz);
+    return (long)lz * (Ly / 2) * Lx + (long)ly * Lx + lx;
 }
 __host__ void convert_host(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
     lx = x;
     ly = ((y >> 2) << 1) + ((y & 0x3) >> 1);
-    lz = z >> 2;
+    lz = z;
 }
 
 __host__ int get_atom_idx_host(int x, int y, int z, int Lx, int Ly, int Lz) {
     int lx, ly, lz;
     convert_host(x, y, z, Lx, Ly, lx, ly, lz);
-    return lz * (Lx * (Ly / 2)) + ly * Lx + lx;
+    return (long)lz * (Ly / 2) * Lx + (long)ly * Lx + lx;
 }
 
 __device__ void calc_neighbor_coords(int x, int y, int z, int dir, int Lx, int Ly, int Lz, int* x2, int* y2, int* z2) {
@@ -37,7 +40,12 @@ __device__ void calc_neighbor_coords(int x, int y, int z, int dir, int Lx, int L
     const int dz[16] = {1, -1, -1, 1, 2, 2, 0, -2, -2, 0, -2, -2, 0, 2, 2, 0};
     *x2 = (x + factor * dx[dir] + Lx) % Lx;
     *y2 = (y + factor * dy[dir] + Ly) % Ly;
-    *z2 = max(0, min(Lz - 1, z + factor * dz[dir]));
+    
+    int new_z = z + factor * dz[dir];
+    
+    if (new_z < 2) new_z = 2;
+    if (new_z >= Lz - 2) new_z = Lz - 3;
+    *z2 = new_z;
 }
 __device__ void randn2_gpu(float* x1, float* x2, curandState* state) {
     float V1, V2, S, f;
@@ -146,6 +154,11 @@ __global__ void axyz_kernel(
         int x2, y2, z2;
         calc_neighbor_coords(x, y, z, dir, Lx, Ly, Lz, &x2, &y2, &z2);
         int neighbor_idx = get_atom_idx(x2, y2, z2, Lx, Ly, Lz);
+
+        if (atoms_read[neighbor_idx].type == 0) {
+            continue;
+        }
+        
         if (neighbor_idx >= 0 && neighbor_idx < Lx * Ly * Lz) {
             float ax2 = atoms_read[neighbor_idx].a.x;
             float ay2 = atoms_read[neighbor_idx].a.y;
@@ -209,10 +222,13 @@ extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, float* hos
     dim3 block(128);
     dim3 grid((max_atoms + block.x - 1) / block.x);
     setup_kernel<<<grid, block>>>(dev_states, 19);
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
 }
 
 extern "C" void cuda_cleanup() {
+    printf("\n===========================================================\n");
+    printf("Total time spent in all cuda_do_many_axyz calls: %.4f ms\n", total_cuda_time_ms);
+    printf("===========================================================\n\n");
     cudaFree(dev_atoms_read);
     cudaFree(dev_atoms_write);
     cudaFree(dev_AA_);
@@ -257,6 +273,7 @@ extern "C" void cuda_do_many_axyz(
             return;
         }
     }
+    auto start_time = std::chrono::high_resolution_clock::now();
 
     cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
 
@@ -293,7 +310,7 @@ extern "C" void cuda_do_many_axyz(
     dim3 setup_grid((count + 127) / 128);
     dim3 setup_block(128);
     setup_kernel<<<setup_grid, setup_block>>>(dev_states, 19);
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
 
     int zero = 0;
     cudaMemcpy(dev_ochered_count, &zero, sizeof(int), cudaMemcpyHostToDevice);
@@ -301,7 +318,7 @@ extern "C" void cuda_do_many_axyz(
     dim3 block(128);
     dim3 grid((count + block.x - 1) / block.x);
     set_config_kernel<<<grid, block>>>(dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count);
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
 
     axyz_kernel<<<grid, block>>>(dev_atoms_read, dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count, dev_states, T,
                                  dev_AA_, dev_BB, dev_transform_array,
@@ -350,7 +367,11 @@ extern "C" void cuda_do_many_axyz(
     cudaFree(dev_ochered_x);
     cudaFree(dev_ochered_y);
     cudaFree(dev_ochered_z);
-    cudaFree(dev_states);
+
+    // =================== КОНЕЦ ИЗМЕРЕНИЯ ВРЕМЕНИ ===================
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed_ms = end_time - start_time;
+    total_cuda_time_ms += elapsed_ms.count();
 }
 
 __global__ void verify_kernel(
