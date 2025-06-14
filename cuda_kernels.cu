@@ -8,7 +8,10 @@ atom_t* dev_atoms_read = nullptr;
 atom_t* dev_atoms_write = nullptr;
 float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
 curandState* dev_states = nullptr;
+int *dev_xs = nullptr, *dev_ys = nullptr, *dev_zs = nullptr;
+int *dev_ochered_count = nullptr, *dev_ochered_x = nullptr, *dev_ochered_y = nullptr, *dev_ochered_z = nullptr;
 static int max_count = 0;
+static int max_ochered_size_allocated = 0;
 static double total_cuda_time_ms = 0.0;
 
 __host__ __device__ void convert(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
@@ -208,12 +211,23 @@ extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, float* hos
     size_t BB_size = Nconfig * dir_number * 9 * sizeof(float);
     size_t transform_size = Nconfig * 6 * sizeof(float);
     max_count = max_atoms;
+    max_ochered_size_allocated = max_atoms * (dir_number + 1);
+
     cudaMalloc(&dev_atoms_read, atoms_size);
     cudaMalloc(&dev_atoms_write, atoms_size);
     cudaMalloc(&dev_AA_, AA_size);
     cudaMalloc(&dev_BB, BB_size);
     cudaMalloc(&dev_transform_array, transform_size);
     cudaMalloc(&dev_states, max_atoms * sizeof(curandState));
+
+    cudaMalloc(&dev_xs, max_atoms * sizeof(int));
+    cudaMalloc(&dev_ys, max_atoms * sizeof(int));
+    cudaMalloc(&dev_zs, max_atoms * sizeof(int));
+    cudaMalloc(&dev_ochered_count, sizeof(int));
+    cudaMalloc(&dev_ochered_x, max_ochered_size_allocated * sizeof(int));
+    cudaMalloc(&dev_ochered_y, max_ochered_size_allocated * sizeof(int));
+    cudaMalloc(&dev_ochered_z, max_ochered_size_allocated * sizeof(int));
+
     cudaMemcpy(dev_atoms_read, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_atoms_write, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_AA_, host_AA_, AA_size, cudaMemcpyHostToDevice);
@@ -235,6 +249,13 @@ extern "C" void cuda_cleanup() {
     cudaFree(dev_BB);
     cudaFree(dev_transform_array);
     cudaFree(dev_states);
+    cudaFree(dev_xs);
+    cudaFree(dev_ys);
+    cudaFree(dev_zs);
+    cudaFree(dev_ochered_count);
+    cudaFree(dev_ochered_x);
+    cudaFree(dev_ochered_y);
+    cudaFree(dev_ochered_z);
 }
 
 extern "C" void cuda_sync_atoms(atom_t* host_atoms, int Lx, int Ly, int Lz) {
@@ -283,21 +304,13 @@ extern "C" void cuda_do_many_axyz(
 
     cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
 
-    int *dev_xs, *dev_ys, *dev_zs;
-    int *dev_ochered_count, *dev_ochered_x, *dev_ochered_y, *dev_ochered_z;
-    curandState* dev_states;
     int max_ochered_size = count * (dir_number + 1); // Каждый атом + до dir_number соседей
+    if (max_ochered_size > max_ochered_size_allocated) {
+        // We can reallocate here if needed, for now just print an error
+        printf("Error: max_ochered_size (%d) exceeds allocated size (%d)\n", max_ochered_size, max_ochered_size_allocated);
+        return;
+    }
 
-    cudaMalloc(&dev_xs, count * sizeof(int));
-    cudaMalloc(&dev_ys, count * sizeof(int));
-    cudaMalloc(&dev_zs, count * sizeof(int));
-    cudaMalloc(&dev_ochered_count, sizeof(int));
-    cudaMalloc(&dev_ochered_x, max_ochered_size * sizeof(int));
-    cudaMalloc(&dev_ochered_y, max_ochered_size * sizeof(int));
-    cudaMalloc(&dev_ochered_z, max_ochered_size * sizeof(int));
-    cudaMalloc(&dev_states, count * sizeof(curandState));
-
- 
     int* host_xs = new int[count];
     int* host_ys = new int[count];
     int* host_zs = new int[count];
@@ -373,13 +386,6 @@ extern "C" void cuda_do_many_axyz(
     delete[] host_ochered_x;
     delete[] host_ochered_y;
     delete[] host_ochered_z;
-    cudaFree(dev_xs);
-    cudaFree(dev_ys);
-    cudaFree(dev_zs);
-    cudaFree(dev_ochered_count);
-    cudaFree(dev_ochered_x);
-    cudaFree(dev_ochered_y);
-    cudaFree(dev_ochered_z);
     // cudaEventDestroy(start_event);
     // cudaEventDestroy(stop_event);
 
