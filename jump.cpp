@@ -182,7 +182,7 @@ int jump(int x, int y, int z, int dir, int* x2_, int* y2_, int* z2_) {
 	if(atoms(x2,y2,z2).type==3)
 	  atoms(x2,y2,z2).type=1;
     calc_B0(x2,y2,z2);
-    cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
+    //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
 //	axyz(x2,y2,z2);
   }
 	
