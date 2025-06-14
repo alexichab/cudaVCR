@@ -372,7 +372,6 @@ void do_many_axyz(void) {
   //verify_accuracy();
 
   struct coord* atoms_to_update = new struct coord[I];
-  int count = 0; // Счетчик найденных "хороших" атомов
 
   for (int i = 0; i < I; i++) {
       struct coord c;
@@ -389,96 +388,4 @@ void do_many_axyz(void) {
   current.n_moves += I;
   //printf("do_many_axyz: finished, n_moves=%d\n", current.n_moves);
   delete[] atoms_to_update;
-}
-
-
-void verify_accuracy() {
-    int test_size = (int)(param.moves_percent / 100. * spisok_atomov.size());
-    if (test_size <= 0 || test_size > spisok_atomov.size()) {
-        printf("verify_accuracy: invalid test_size=%d\n", test_size);
-        return;
-    }
-    struct coord* cpu_atoms_to_update = new struct coord[test_size];
-    struct coord* gpu_atoms_to_update = new struct coord[test_size];
-    atom_t* cpu_atoms = new atom_t[Lx * Ly * Lz];
-    atom_t* gpu_atoms = new atom_t[Lx * Ly * Lz];
-    memcpy(cpu_atoms, atoms.lat, Lx * Ly * Lz * sizeof(atom_t));
-    memcpy(gpu_atoms, atoms.lat, Lx * Ly * Lz * sizeof(atom_t));
-
-    for (int i = 0; i < test_size; i++) {
-        int n = random_(spisok_atomov.size());
-        cpu_atoms_to_update[i] = spisok_atomov[n];
-        gpu_atoms_to_update[i] = spisok_atomov[n];
-    }
-
-    printf("\nRunning CPU version...\n");
-    for (int i = 0; i < test_size; i++) {
-        struct coord c = cpu_atoms_to_update[i];
-        int idx = get_atom_idx_host(c.x, c.y, c.z, Lx, Ly, Lz);
-        printf("CPU Before atom (%d,%d,%d): (%.6f, %.6f, %.6f)\n", 
-               c.x, c.y, c.z, 
-               cpu_atoms[idx].a.x, cpu_atoms[idx].a.y, cpu_atoms[idx].a.z);
-        
-        float orig_x = atoms(c.x, c.y, c.z).a.x;
-        float orig_y = atoms(c.x, c.y, c.z).a.y;
-        float orig_z = atoms(c.x, c.y, c.z).a.z;
-        
-        axyz(c.x, c.y, c.z);
-        
-        cpu_atoms[idx].a.x = atoms(c.x, c.y, c.z).a.x;
-        cpu_atoms[idx].a.y = atoms(c.x, c.y, c.z).a.y;
-        cpu_atoms[idx].a.z = atoms(c.x, c.y, c.z).a.z;
-        atoms(c.x, c.y, c.z).a.x = orig_x;
-        atoms(c.x, c.y, c.z).a.y = orig_y;
-        atoms(c.x, c.y, c.z).a.z = orig_z;
-        
-        printf("CPU After  atom (%d,%d,%d): (%.6f, %.6f, %.6f)\n", 
-               c.x, c.y, c.z, 
-               cpu_atoms[idx].a.x, cpu_atoms[idx].a.y, cpu_atoms[idx].a.z);
-    }
-
-    printf("\nRunning GPU version...\n");
-    cuda_do_many_axyz(gpu_atoms_to_update, test_size, gpu_atoms, Lx, Ly, Lz, 
-                      param.T, &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
-
-    float max_diff = 0.0f;
-    float avg_diff = 0.0f;
-    int diff_count = 0;
-
-    printf("\nComparing results...\n");
-    for (int i = 0; i < test_size; i++) {
-        struct coord c = cpu_atoms_to_update[i];
-        int idx = get_atom_idx_host(c.x, c.y, c.z, Lx, Ly, Lz);
-        
-        if (idx >= 0 && idx < Lx * Ly * Lz) {
-            float diff_x = fabsf(cpu_atoms[idx].a.x - gpu_atoms[idx].a.x);
-            float diff_y = fabsf(cpu_atoms[idx].a.y - gpu_atoms[idx].a.y);
-            float diff_z = fabsf(cpu_atoms[idx].a.z - gpu_atoms[idx].a.z);
-            
-            printf("Atom (%d,%d,%d):\n", c.x, c.y, c.z);
-            printf("  CPU: (%.6f, %.6f, %.6f)\n", 
-                   cpu_atoms[idx].a.x, cpu_atoms[idx].a.y, cpu_atoms[idx].a.z);
-            printf("  GPU: (%.6f, %.6f, %.6f)\n", 
-                   gpu_atoms[idx].a.x, gpu_atoms[idx].a.y, gpu_atoms[idx].a.z);
-            printf("  Diff: (%.6f, %.6f, %.6f)\n", diff_x, diff_y, diff_z);
-            
-            max_diff = std::max(max_diff, std::max(diff_x, std::max(diff_y, diff_z)));
-            avg_diff += (diff_x + diff_y + diff_z) / 3.0f;
-            diff_count++;
-        }
-    }
-
-    if (diff_count > 0) {
-        avg_diff /= diff_count;
-        printf("\nVerification results:\n");
-        printf("Total atoms checked: %d\n", test_size);
-        printf("Atoms with differences: %d\n", diff_count);
-        printf("Max difference: %e\n", max_diff);
-        printf("Average difference: %e\n", avg_diff);
-    }
-
-    delete[] cpu_atoms_to_update;
-    delete[] gpu_atoms_to_update;
-    delete[] cpu_atoms;
-    delete[] gpu_atoms;
 }

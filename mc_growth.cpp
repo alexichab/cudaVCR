@@ -2,7 +2,8 @@
 #include "mc_growth.h"
 #include "compress.h"
 #include "cuda_kernels.h"
-
+#include <iostream>
+#include <cassert>
 //------- глобальные переменные и массивы -------------
 
 int Lx=40, Ly=40, Lz=100;
@@ -170,6 +171,30 @@ int main(int argc, char** argv) {
   
 
 	if(current.n_deposited==0)  write_params_to_log("log.txt");
+
+ 
+  // std::cout << "\n--- Verifying data before cuda_init ---\n";
+  // std::cout << "Lattice dimensions (Lx, Ly, Lz): " << Lx << ", " << Ly << ", " << Lz << std::endl;
+  // std::cout << "Number of atoms in spisok_atomov: " << spisok_atomov.size() << std::endl;
+  
+  // assert(Lx > 0 && Ly > 0 && Lz > 0);
+  // assert(spisok_atomov.size() > 0);
+
+  // assert(atoms.lat != nullptr);
+  // assert(&AA_[0][0] != nullptr);
+  // assert(&BB[0][0][0] != nullptr);
+  // assert(&transform_array[0][0] != nullptr);
+  // std::cout << "All data pointers are valid (not null)." << std::endl;
+
+  // size_t total_atoms = (size_t)Lx * Ly * Lz;
+  // int check_idx_1 = total_atoms / 4;
+  // int check_idx_2 = total_atoms / 2;
+  
+  // std::cout << "Sample atom data (type) at index " << check_idx_1 << ": " << (int)atoms.lat[check_idx_1].type << std::endl;
+  // std::cout << "Sample atom data (type) at index " << check_idx_2 << ": " << (int)atoms.lat[check_idx_2].type << std::endl;
+  // std::cout << "Sample AA_ data [10][0]: " << AA_[10][0] << std::endl;
+  // std::cout << "---------------------------------------\n\n";
+
   cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0], spisok_atomov.size());
   main_loop();
   cuda_cleanup();
