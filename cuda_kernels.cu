@@ -373,27 +373,3 @@ extern "C" void cuda_do_many_axyz(
     std::chrono::duration<double, std::milli> elapsed_ms = end_time - start_time;
     total_cuda_time_ms += elapsed_ms.count();
 }
-
-__global__ void verify_kernel(
-    atom_t* atoms_cuda, atom_t* atoms_cpu,
-    int Lx, int Ly, int Lz,
-    float* max_diff, float* avg_diff)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= Lx * Ly * Lz) return;
-    
-    float diff_x = fabsf(atoms_cuda[idx].a.x - atoms_cpu[idx].a.x);
-    float diff_y = fabsf(atoms_cuda[idx].a.y - atoms_cpu[idx].a.y);
-    float diff_z = fabsf(atoms_cuda[idx].a.z - atoms_cpu[idx].a.z);
-    
-    float max_val = max(diff_x, max(diff_y, diff_z));
-    
-    int* max_diff_int = (int*)max_diff;
-    int max_val_int = __float_as_int(max_val);
-    int old = *max_diff_int;
-    while (max_val_int > old) {
-        old = atomicCAS(max_diff_int, old, max_val_int);
-    }
-    
-    atomicAdd(avg_diff, (diff_x + diff_y + diff_z) / 3.0f);
-}
