@@ -275,6 +275,12 @@ extern "C" void cuda_do_many_axyz(
     }
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    // // Создание событий для замера времени
+    // cudaEvent_t start_event, stop_event;
+    // cudaEventCreate(&start_event);
+    // cudaEventCreate(&stop_event);
+    // cudaEventRecord(start_event, 0);
+
     cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
 
     int *dev_xs, *dev_ys, *dev_zs;
@@ -307,9 +313,9 @@ extern "C" void cuda_do_many_axyz(
     delete[] host_ys;
     delete[] host_zs;
 
-    dim3 setup_grid((count + 127) / 128);
-    dim3 setup_block(128);
-    setup_kernel<<<setup_grid, setup_block>>>(dev_states, 19);
+    // dim3 setup_grid((count + 127) / 128);
+    // dim3 setup_block(128);
+    // setup_kernel<<<setup_grid, setup_block>>>(dev_states, 19);
     //cudaDeviceSynchronize();
 
     int zero = 0;
@@ -323,6 +329,13 @@ extern "C" void cuda_do_many_axyz(
     axyz_kernel<<<grid, block>>>(dev_atoms_read, dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count, dev_states, T,
                                  dev_AA_, dev_BB, dev_transform_array,
                                  dev_ochered_x, dev_ochered_y, dev_ochered_z, dev_ochered_count, max_ochered_size);
+    
+    // cudaEventRecord(stop_event, 0);
+    // cudaEventSynchronize(stop_event);
+
+    // float cuda_time_ms;
+    // cudaEventElapsedTime(&cuda_time_ms, start_event, stop_event);
+    // total_cuda_time_ms += cuda_time_ms;
     cudaDeviceSynchronize();
 
     // Копируем обновлённые атомы обратно на хост
@@ -367,8 +380,10 @@ extern "C" void cuda_do_many_axyz(
     cudaFree(dev_ochered_x);
     cudaFree(dev_ochered_y);
     cudaFree(dev_ochered_z);
+    // cudaEventDestroy(start_event);
+    // cudaEventDestroy(stop_event);
 
-    // =================== КОНЕЦ ИЗМЕРЕНИЯ ВРЕМЕНИ ===================
+    //=================== КОНЕЦ ИЗМЕРЕНИЯ ВРЕМЕНИ ===================
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_ms = end_time - start_time;
     total_cuda_time_ms += elapsed_ms.count();
