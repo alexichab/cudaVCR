@@ -4,6 +4,13 @@
 #include "cuda_kernels.h"
 #include <chrono>
 
+#define CUDA_CHECK(err) { \
+    if (err != cudaSuccess) { \
+        printf("CUDA Error: %s at %s:%d\n", cudaGetErrorString(err), __FILE__, __LINE__); \
+        exit(EXIT_FAILURE); \
+    } \
+}
+
 atom_t* dev_atoms_read = nullptr;
 atom_t* dev_atoms_write = nullptr;
 float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
@@ -133,7 +140,7 @@ __global__ void axyz_kernel(
 
     unsigned short config_ = atoms_write[atom_idx].config;
     if (config_ >= Nconfig || config_ == 65535) return;
-
+// ВОТ ТУТ НИЖЕ СКОРЕЕ ВСЕГО ЛАЖА
     __shared__ float shared_AA[6];
     __shared__ float shared_transform[6];
     if (threadIdx.x < 6) {
@@ -183,6 +190,7 @@ __global__ void axyz_kernel(
     }
 
     float ax_, ay_, az_;
+    //И ТУТ ВОЗМОЖНО ЛАЖА и изза этого или сверху, выходим за границы!!!
     random_displacements_gpu(&ax_, &ay_, &az_, config_, shared_transform, &states[idx], T);
 
     ax_ -= 0.5f * (A_xx * Bx + A_xy * By + A_xz * Bz);
@@ -304,6 +312,59 @@ extern "C" void cuda_do_many_axyz(
 
     cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
 
+    // // ======================= НАЧАЛО ОТЛАДОЧНОГО КОДА =======================
+    // if (count > 0) {
+    //     printf("\n--- DEBUG: Проверка содержимого dev_atoms_read ---\n");
+
+    //     // 1. Берем первый атом из списка на обновление для теста
+    //     int test_x = atoms_to_update[0].x;
+    //     int test_y = atoms_to_update[0].y;
+    //     int test_z = atoms_to_update[0].z;
+    //     int test_idx = get_atom_idx_host(test_x, test_y, test_z, Lx, Ly, Lz);
+
+    //     // 2. Находим его первого соседа (dir=0)
+    //     int test_n_x, test_n_y, test_n_z;
+    //     { // Локальный scope, чтобы calc_neighbor_coords не ругался на __device__
+    //         int factor = (test_z % 2 == 0) ? 1 : -1;
+    //         const int dx[16] = {1, 1, -1, -1, 0, 2, 2, 0, 2, 2, 0, -2, -2, 0, -2, -2};
+    //         const int dy[16] = {1, -1, 1, -1, 2, 0, 2, -2, 0, -2, 2, 0, 2, -2, 0, -2};
+    //         const int dz[16] = {1, -1, -1, 1, 2, 2, 0, -2, -2, 0, -2, -2, 0, 2, 2, 0};
+    //         test_n_x = (test_x + factor * dx[0] + Lx) % Lx;
+    //         test_n_y = (test_y + factor * dy[0] + Ly) % Ly;
+    //         int new_z = test_z + factor * dz[0];
+    //         if (new_z < 2) new_z = 2;
+    //         if (new_z >= Lz - 2) new_z = Lz - 3;
+    //         test_n_z = new_z;
+    //     }
+    //     int test_neighbor_idx = get_atom_idx_host(test_n_x, test_n_y, test_n_z, Lx, Ly, Lz);
+
+    //     // 3. Копируем данные этих двух атомов с GPU (dev_atoms_read)
+    //     atom_t gpu_atom, gpu_neighbor;
+    //     CUDA_CHECK(cudaMemcpy(&gpu_atom, &dev_atoms_read[test_idx], sizeof(atom_t), cudaMemcpyDeviceToHost));
+    //     CUDA_CHECK(cudaMemcpy(&gpu_neighbor, &dev_atoms_read[test_neighbor_idx], sizeof(atom_t), cudaMemcpyDeviceToHost));
+        
+    //     // 4. Берем те же данные напрямую с CPU (host_atoms) для сравнения
+    //     atom_t cpu_atom = host_atoms[test_idx];
+    //     atom_t cpu_neighbor = host_atoms[test_neighbor_idx];
+
+    //     // 5. Печатаем и сравниваем
+    //     printf("Тестовый атом (idx: %d):\n", test_idx);
+    //     printf("  CPU : type=%d, a.x=%.4f\n", cpu_atom.type, cpu_atom.a.x);
+    //     printf("  GPU : type=%d, a.x=%.4f\n", gpu_atom.type, gpu_atom.a.x);
+        
+    //     printf("Его сосед (idx: %d):\n", test_neighbor_idx);
+    //     printf("  CPU : type=%d, a.x=%.4f\n", cpu_neighbor.type, cpu_neighbor.a.x);
+    //     printf("  GPU : type=%d, a.x=%.4f\n", gpu_neighbor.type, gpu_neighbor.a.x);
+
+    //     if (cpu_atom.type == gpu_atom.type && cpu_neighbor.type == gpu_neighbor.type) {
+    //         printf("РЕЗУЛЬТАТ: Успех! Данные на GPU полностью совпадают с CPU. Соседи на месте.\n");
+    //     } else {
+    //         printf("РЕЗУЛЬТАТ: Ошибка! Данные на GPU не совпадают. Проблема в копировании.\n");
+    //     }
+    //     printf("--------------------------------------------------\n\n");
+    // }
+    // // ======================== КОНЕЦ ОТЛАДОЧНОГО КОДА =======================
+
     int max_ochered_size = count * (dir_number + 1); // Каждый атом + до dir_number соседей
     if (max_ochered_size > max_ochered_size_allocated) {
         // We can reallocate here if needed, for now just print an error
@@ -359,7 +420,6 @@ extern "C" void cuda_do_many_axyz(
         int idx = get_atom_idx_host(x, y, z, Lx, Ly, Lz);
         cudaMemcpy(&host_atoms[idx], &dev_atoms_write[idx], sizeof(atom_t), cudaMemcpyDeviceToHost);
     }
-    cudaMemcpy(dev_atoms_read, dev_atoms_write, Lx * Ly * Lz * sizeof(atom_t), cudaMemcpyDeviceToDevice);
 
     int ochered_count;
     cudaMemcpy(&ochered_count, dev_ochered_count, sizeof(int), cudaMemcpyDeviceToHost);
