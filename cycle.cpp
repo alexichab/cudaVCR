@@ -383,7 +383,7 @@ void do_many_axyz(void) {
       
       atoms_to_update[i] = c;
   }
-
+  //printf("Количество атомов на обновление = %d\n",I);
   cuda_do_many_axyz(atoms_to_update, I, atoms.lat, Lx, Ly, Lz, param.T, &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
   current.n_moves += I;
   //printf("do_many_axyz: finished, n_moves=%d\n", current.n_moves);

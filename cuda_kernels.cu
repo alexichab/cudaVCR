@@ -20,6 +20,8 @@ int *dev_ochered_count = nullptr, *dev_ochered_x = nullptr, *dev_ochered_y = nul
 static int max_count = 0;
 static int max_ochered_size_allocated = 0;
 static double total_cuda_time_ms = 0.0;
+static int g_optimal_block_size = 0;
+
 
 __host__ __device__ void convert(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
     lx = x;
@@ -93,10 +95,12 @@ __device__ unsigned short massiv_to_config1(int* nb_type) {
     return conf;
 }
 
-__global__ void setup_kernel(curandState* state, unsigned long seed) {
+__global__ void setup_kernel(curandState* state, unsigned long seed, int max_n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= max_n) {return;}
     curand_init(seed, idx, 0, &state[idx]);
 }
+
 
 __global__ void set_config_kernel(
     atom_t* dev_atoms, int Lx, int Ly, int Lz,
@@ -140,7 +144,7 @@ __global__ void axyz_kernel(
 
     unsigned short config_ = atoms_write[atom_idx].config;
     if (config_ >= Nconfig || config_ == 65535) return;
-// ВОТ ТУТ НИЖЕ СКОРЕЕ ВСЕГО ЛАЖА
+    // ВОТ ТУТ НИЖЕ СКОРЕЕ ВСЕГО ЛАЖА
     __shared__ float shared_AA[6];
     __shared__ float shared_transform[6];
     if (threadIdx.x < 6) {
@@ -201,7 +205,6 @@ __global__ void axyz_kernel(
     atoms_write[atom_idx].a.y = ay_;
     atoms_write[atom_idx].a.z = az_;
     atoms_write[atom_idx].type = atoms_read[atom_idx].type;
-    atoms_write[atom_idx].config = atoms_read[atom_idx].config;
     atoms_write[atom_idx].B0 = atoms_read[atom_idx].B0;
 
     // Добавляем текущий атом в очередь
@@ -210,15 +213,17 @@ __global__ void axyz_kernel(
         d_ochered_x[ochered_idx] = x;
         d_ochered_y[ochered_idx] = y;
         d_ochered_z[ochered_idx] = z;
-    }
+    } __syncthreads();
 }
 
-extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, float* host_AA_, float* host_BB, float* host_transform_array, int max_atoms) {
+extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, 
+                          float* host_AA_, float* host_BB, float* host_transform_array, 
+                          int max_atoms) 
+{
     size_t atoms_size = Lx * Ly * Lz * sizeof(atom_t);
     size_t AA_size = Nconfig * 6 * sizeof(float);
     size_t BB_size = Nconfig * dir_number * 9 * sizeof(float);
     size_t transform_size = Nconfig * 6 * sizeof(float);
-    max_count = max_atoms;
     max_ochered_size_allocated = max_atoms * (dir_number + 1);
 
     cudaMalloc(&dev_atoms_read, atoms_size);
@@ -235,17 +240,44 @@ extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, float* hos
     cudaMalloc(&dev_ochered_x, max_ochered_size_allocated * sizeof(int));
     cudaMalloc(&dev_ochered_y, max_ochered_size_allocated * sizeof(int));
     cudaMalloc(&dev_ochered_z, max_ochered_size_allocated * sizeof(int));
-
+    
     cudaMemcpy(dev_atoms_read, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_atoms_write, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_AA_, host_AA_, AA_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_BB, host_BB, BB_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_transform_array, host_transform_array, transform_size, cudaMemcpyHostToDevice);
-    dim3 block(128);
-    dim3 grid((max_atoms + block.x - 1) / block.x);
-    setup_kernel<<<grid, block>>>(dev_states, 19);
-    //cudaDeviceSynchronize();
+    dim3 block_setup(128);
+    dim3 grid_setup((max_atoms + block_setup.x - 1) / block_setup.x);
+    setup_kernel<<<grid_setup, block_setup>>>(dev_states, 19, max_atoms);
+    
+    if (g_optimal_block_size == 0) {
+        //printf("Performing one-time CUDA occupancy calculation...\n");
+        int max_occupancy = 0;
+        int device;
+        cudaGetDevice(&device);
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, device);
+
+        for (int block_size = 64; block_size <= prop.maxThreadsPerBlock; block_size += 32) {
+            int active_blocks;
+            
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                &active_blocks,
+                axyz_kernel,
+                block_size,
+                0 // Static shared memory is known to the driver
+            );
+            
+            int occupancy = active_blocks * block_size;
+            if (occupancy > max_occupancy) {
+                max_occupancy = occupancy;
+                g_optimal_block_size = block_size;
+            }
+        }
+        printf("CUDA Occupancy Calculation: Optimal block size set to %d\n", g_optimal_block_size);
+    }
 }
+
 
 extern "C" void cuda_cleanup() {
     printf("\n===========================================================\n");
@@ -387,16 +419,38 @@ extern "C" void cuda_do_many_axyz(
     delete[] host_ys;
     delete[] host_zs;
 
+    int block_size;
+    if (count < g_optimal_block_size) {
+        // For a small number of atoms, round up to the nearest multiple of 32
+        block_size = ((count + 31) / 32) * 32;
+        // Ensure block_size is at least 32 if there are any atoms
+        if (block_size == 0) block_size = 32;
+        printf("block size = %d",block_size);
+    } else {
+        // For a large number of atoms, use the pre-calculated optimal block size
+        block_size = g_optimal_block_size;
+                printf("block size = %d",block_size);
+
+    }
+
+    // Ensure g_optimal_block_size has been initialized
+    if (block_size <= 0) {
+        block_size = 128; // Fallback to a default value
+        printf("Warning: optimal block size not set or invalid. Falling back to %d.\n", block_size);
+    }
+
+    dim3 block(block_size);
+    dim3 grid((count + block.x - 1) / block.x);
+
+    //printf("Dynamic CUDA Launch: Atoms=%d -> BlockSize=%d, GridSize=%d\n", count, block_size, grid.x);
+
+
     // dim3 setup_grid((count + 127) / 128);
     // dim3 setup_block(128);
     // setup_kernel<<<setup_grid, setup_block>>>(dev_states, 19);
-    //cudaDeviceSynchronize();
-
     int zero = 0;
     cudaMemcpy(dev_ochered_count, &zero, sizeof(int), cudaMemcpyHostToDevice);
 
-    dim3 block(128);
-    dim3 grid((count + block.x - 1) / block.x);
     set_config_kernel<<<grid, block>>>(dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count);
     //cudaDeviceSynchronize();
 
