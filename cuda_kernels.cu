@@ -17,7 +17,8 @@ float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
 curandState* dev_states = nullptr;
 int *dev_xs = nullptr, *dev_ys = nullptr, *dev_zs = nullptr;
 int *dev_ochered_count = nullptr, *dev_ochered_x = nullptr, *dev_ochered_y = nullptr, *dev_ochered_z = nullptr;
-static int max_count = 0;
+
+static int max_atoms_to_update_size = 0;
 static int max_ochered_size_allocated = 0;
 static double total_cuda_time_ms = 0.0;
 static int g_optimal_block_size = 0;
@@ -95,9 +96,9 @@ __device__ unsigned short massiv_to_config1(int* nb_type) {
     return conf;
 }
 
-__global__ void setup_kernel(curandState* state, unsigned long seed, int max_n) {
+__global__ void setup_kernel(curandState* state, unsigned long seed, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= max_n) {return;}
+    if (idx >= n) {return;}
     curand_init(seed, idx, 0, &state[idx]);
 }
 
@@ -213,45 +214,57 @@ __global__ void axyz_kernel(
         d_ochered_x[ochered_idx] = x;
         d_ochered_y[ochered_idx] = y;
         d_ochered_z[ochered_idx] = z;
-    } __syncthreads();
+    }
 }
 
 extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, 
                           float* host_AA_, float* host_BB, float* host_transform_array, 
                           int max_atoms) 
 {
+    // --- Global, static-sized arrays ---
     size_t atoms_size = Lx * Ly * Lz * sizeof(atom_t);
     size_t AA_size = Nconfig * 6 * sizeof(float);
     size_t BB_size = Nconfig * dir_number * 9 * sizeof(float);
     size_t transform_size = Nconfig * 6 * sizeof(float);
-    max_ochered_size_allocated = max_atoms * (dir_number + 1);
 
     cudaMalloc(&dev_atoms_read, atoms_size);
     cudaMalloc(&dev_atoms_write, atoms_size);
     cudaMalloc(&dev_AA_, AA_size);
     cudaMalloc(&dev_BB, BB_size);
     cudaMalloc(&dev_transform_array, transform_size);
-    cudaMalloc(&dev_states, max_atoms * sizeof(curandState));
-
-    cudaMalloc(&dev_xs, max_atoms * sizeof(int));
-    cudaMalloc(&dev_ys, max_atoms * sizeof(int));
-    cudaMalloc(&dev_zs, max_atoms * sizeof(int));
-    cudaMalloc(&dev_ochered_count, sizeof(int));
-    cudaMalloc(&dev_ochered_x, max_ochered_size_allocated * sizeof(int));
-    cudaMalloc(&dev_ochered_y, max_ochered_size_allocated * sizeof(int));
-    cudaMalloc(&dev_ochered_z, max_ochered_size_allocated * sizeof(int));
     
     cudaMemcpy(dev_atoms_read, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_atoms_write, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_AA_, host_AA_, AA_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_BB, host_BB, BB_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_transform_array, host_transform_array, transform_size, cudaMemcpyHostToDevice);
-    dim3 block_setup(128);
-    dim3 grid_setup((max_atoms + block_setup.x - 1) / block_setup.x);
-    setup_kernel<<<grid_setup, block_setup>>>(dev_states, 19, max_atoms);
+
+    // --- Workspace buffers, sized for 2% of total atoms as a safety margin ---
+    int atoms_to_update_size = (int)(max_atoms * 0.02);
+    if (atoms_to_update_size < 128) atoms_to_update_size = 128; // Set a minimum 
     
+    printf("Allocating CUDA work buffers for up to %d atoms (2%% of total).\n", atoms_to_update_size);
+    max_atoms_to_update_size = atoms_to_update_size;
+
+    cudaMalloc(&dev_states, atoms_to_update_size * sizeof(curandState));
+    cudaMalloc(&dev_xs, atoms_to_update_size * sizeof(int));
+    cudaMalloc(&dev_ys, atoms_to_update_size * sizeof(int));
+    cudaMalloc(&dev_zs, atoms_to_update_size * sizeof(int));
+
+    max_ochered_size_allocated = atoms_to_update_size * (dir_number + 1);
+    cudaMalloc(&dev_ochered_count, sizeof(int));
+    cudaMalloc(&dev_ochered_x, max_ochered_size_allocated * sizeof(int));
+    cudaMalloc(&dev_ochered_y, max_ochered_size_allocated * sizeof(int));
+    cudaMalloc(&dev_ochered_z, max_ochered_size_allocated * sizeof(int));
+
+    // Initialize random states for the entire buffer
+    dim3 block_setup(128);
+    dim3 grid_setup((atoms_to_update_size + block_setup.x - 1) / block_setup.x);
+    setup_kernel<<<grid_setup, block_setup>>>(dev_states, 19, atoms_to_update_size);
+    
+    // --- One-time occupancy calculation ---
     if (g_optimal_block_size == 0) {
-        //printf("Performing one-time CUDA occupancy calculation...\n");
+        printf("Performing one-time CUDA occupancy calculation...\n");
         int max_occupancy = 0;
         int device;
         cudaGetDevice(&device);
@@ -314,95 +327,22 @@ extern "C" void cuda_do_many_axyz(
     float* host_BB,
     float* host_transform_array)
 {
-    // if (!atoms_to_update || !host_atoms || !host_AA_ || !host_BB || !host_transform_array) {
-    //     printf("Ошибка: NULL указатель в cuda_do_many_axyz\n");
-    //     return;
-    // }
-    // if (count <= 0 || count > max_count) {
-    //     printf("cuda_do_many_axyz: invalid input: count=%d, max_count=%d\n", count, max_count);
-    //     return;
-    // }
-    //printf("cuda_do_many_axyz: count=%d, Lx=%d, Ly=%d, Lz=%d\n", count, Lx, Ly, Lz);
-
-    for (int i = 0; i < count; i++) {
-        int x = atoms_to_update[i].x;
-        int y = atoms_to_update[i].y;
-        int z = atoms_to_update[i].z;
-        int idx = get_atom_idx_host(x, y, z, Lx, Ly, Lz);
-        if (idx < 0 || idx >= Lx * Ly * Lz) {
-            printf("некорректный индекс %d для атома %d\n", idx, i);
-            return;
-        }
-    }
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    // // Создание событий для замера времени
-    // cudaEvent_t start_event, stop_event;
-    // cudaEventCreate(&start_event);
-    // cudaEventCreate(&stop_event);
-    // cudaEventRecord(start_event, 0);
-
-    cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
-
-    // // ======================= НАЧАЛО ОТЛАДОЧНОГО КОДА =======================
-    // if (count > 0) {
-    //     printf("\n--- DEBUG: Проверка содержимого dev_atoms_read ---\n");
-
-    //     // 1. Берем первый атом из списка на обновление для теста
-    //     int test_x = atoms_to_update[0].x;
-    //     int test_y = atoms_to_update[0].y;
-    //     int test_z = atoms_to_update[0].z;
-    //     int test_idx = get_atom_idx_host(test_x, test_y, test_z, Lx, Ly, Lz);
-
-    //     // 2. Находим его первого соседа (dir=0)
-    //     int test_n_x, test_n_y, test_n_z;
-    //     { // Локальный scope, чтобы calc_neighbor_coords не ругался на __device__
-    //         int factor = (test_z % 2 == 0) ? 1 : -1;
-    //         const int dx[16] = {1, 1, -1, -1, 0, 2, 2, 0, 2, 2, 0, -2, -2, 0, -2, -2};
-    //         const int dy[16] = {1, -1, 1, -1, 2, 0, 2, -2, 0, -2, 2, 0, 2, -2, 0, -2};
-    //         const int dz[16] = {1, -1, -1, 1, 2, 2, 0, -2, -2, 0, -2, -2, 0, 2, 2, 0};
-    //         test_n_x = (test_x + factor * dx[0] + Lx) % Lx;
-    //         test_n_y = (test_y + factor * dy[0] + Ly) % Ly;
-    //         int new_z = test_z + factor * dz[0];
-    //         if (new_z < 2) new_z = 2;
-    //         if (new_z >= Lz - 2) new_z = Lz - 3;
-    //         test_n_z = new_z;
-    //     }
-    //     int test_neighbor_idx = get_atom_idx_host(test_n_x, test_n_y, test_n_z, Lx, Ly, Lz);
-
-    //     // 3. Копируем данные этих двух атомов с GPU (dev_atoms_read)
-    //     atom_t gpu_atom, gpu_neighbor;
-    //     CUDA_CHECK(cudaMemcpy(&gpu_atom, &dev_atoms_read[test_idx], sizeof(atom_t), cudaMemcpyDeviceToHost));
-    //     CUDA_CHECK(cudaMemcpy(&gpu_neighbor, &dev_atoms_read[test_neighbor_idx], sizeof(atom_t), cudaMemcpyDeviceToHost));
-        
-    //     // 4. Берем те же данные напрямую с CPU (host_atoms) для сравнения
-    //     atom_t cpu_atom = host_atoms[test_idx];
-    //     atom_t cpu_neighbor = host_atoms[test_neighbor_idx];
-
-    //     // 5. Печатаем и сравниваем
-    //     printf("Тестовый атом (idx: %d):\n", test_idx);
-    //     printf("  CPU : type=%d, a.x=%.4f\n", cpu_atom.type, cpu_atom.a.x);
-    //     printf("  GPU : type=%d, a.x=%.4f\n", gpu_atom.type, gpu_atom.a.x);
-        
-    //     printf("Его сосед (idx: %d):\n", test_neighbor_idx);
-    //     printf("  CPU : type=%d, a.x=%.4f\n", cpu_neighbor.type, cpu_neighbor.a.x);
-    //     printf("  GPU : type=%d, a.x=%.4f\n", gpu_neighbor.type, gpu_neighbor.a.x);
-
-    //     if (cpu_atom.type == gpu_atom.type && cpu_neighbor.type == gpu_neighbor.type) {
-    //         printf("РЕЗУЛЬТАТ: Успех! Данные на GPU полностью совпадают с CPU. Соседи на месте.\n");
-    //     } else {
-    //         printf("РЕЗУЛЬТАТ: Ошибка! Данные на GPU не совпадают. Проблема в копировании.\n");
-    //     }
-    //     printf("--------------------------------------------------\n\n");
-    // }
-    // // ======================== КОНЕЦ ОТЛАДОЧНОГО КОДА =======================
-
-    int max_ochered_size = count * (dir_number + 1); // Каждый атом + до dir_number соседей
-    if (max_ochered_size > max_ochered_size_allocated) {
-        // We can reallocate here if needed, for now just print an error
-        printf("Error: max_ochered_size (%d) exceeds allocated size (%d)\n", max_ochered_size, max_ochered_size_allocated);
+    if (count == 0) {
         return;
     }
+
+    // // CRITICAL: Check if the number of atoms to process exceeds our pre-allocated buffer.
+    // if (count > max_atoms_to_update_size) {
+    //     printf("\nFATAL CUDA ERROR:\n");
+    //     printf("  Attempting to process %d atoms, but the work buffer was only allocated for %d.\n", count, max_atoms_to_update_size);
+    //     printf("  This usually means 'param.moves_percent' is larger than the 2%% buffer size.\n");
+    //     printf("  Solution: Increase the percentage in cuda_init() or decrease 'param.moves_percent'.\n\n");
+    //     exit(EXIT_FAILURE);
+    // }
+
+    auto start_time = std::chrono::high_resolution_clock::now();
+
+    cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
 
     int* host_xs = new int[count];
     int* host_ys = new int[count];
@@ -421,21 +361,15 @@ extern "C" void cuda_do_many_axyz(
 
     int block_size;
     if (count < g_optimal_block_size) {
-        // For a small number of atoms, round up to the nearest multiple of 32
         block_size = ((count + 31) / 32) * 32;
-        // Ensure block_size is at least 32 if there are any atoms
         if (block_size == 0) block_size = 32;
-        printf("block size = %d",block_size);
     } else {
-        // For a large number of atoms, use the pre-calculated optimal block size
         block_size = g_optimal_block_size;
-                printf("block size = %d",block_size);
-
     }
 
     // Ensure g_optimal_block_size has been initialized
     if (block_size <= 0) {
-        block_size = 128; // Fallback to a default value
+        block_size = 128; 
         printf("Warning: optimal block size not set or invalid. Falling back to %d.\n", block_size);
     }
 
@@ -443,16 +377,11 @@ extern "C" void cuda_do_many_axyz(
     dim3 grid((count + block.x - 1) / block.x);
 
     //printf("Dynamic CUDA Launch: Atoms=%d -> BlockSize=%d, GridSize=%d\n", count, block_size, grid.x);
-
-
-    // dim3 setup_grid((count + 127) / 128);
-    // dim3 setup_block(128);
-    // setup_kernel<<<setup_grid, setup_block>>>(dev_states, 19);
+    int max_ochered_size = count * (dir_number + 1);
     int zero = 0;
     cudaMemcpy(dev_ochered_count, &zero, sizeof(int), cudaMemcpyHostToDevice);
 
     set_config_kernel<<<grid, block>>>(dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count);
-    //cudaDeviceSynchronize();
 
     axyz_kernel<<<grid, block>>>(dev_atoms_read, dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count, dev_states, T,
                                  dev_AA_, dev_BB, dev_transform_array,
