@@ -6,6 +6,9 @@
 #include "cuda_kernels.h"
 #include <cuda_runtime.h>
 #include <vector>
+#include <iostream>
+#include <iomanip>
+#include <cmath>
 
 extern float AA_[Nconfig][6];
 extern float BB[Nconfig][dir_number][9];
@@ -15,6 +18,201 @@ void mc_step(void);   // шаг Монте-Карло
 double calc_P_jump_sum(void); // сосчитать суммарную вероятность всех прыжков
 void choose_jump(double P_jump_sum, int* x, int* y, int* z, int* dir); // выбрать прыжок
 void do_many_axyz(void/*int x, int y, int z*/);  // сделать "шевеления" атомов после прыжка или осаждения
+
+// Хелперы для индексации, чтобы не зависеть от cuda_kernels.cu
+static inline void convert_host(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
+    lx = x;
+    ly = ((y >> 2) << 1) + ((y & 0x3) >> 1);
+    lz = z;
+}
+
+static inline int get_atom_idx_host(int x, int y, int z, int Lx, int Ly, int Lz) {
+    int lx, ly, lz;
+    convert_host(x, y, z, Lx, Ly, lx, ly, lz);
+    return (long)lz * (Ly / 2) * Lx + (long)ly * Lx + lx;
+}
+
+
+// void randn2_sequential_deterministic(float* x1, float* x2, const float* V) {
+//   float S, f;
+//   S = V[0] * V[0] + V[1] * V[1];
+//   if (S >= 1.0f || S == 0.0f) { // Добавляем проверку как в оригинале
+//       *x1 = 0.0f; *x2 = 0.0f; return;
+//   }
+//   f = sqrtf(-2.0f * logf(S) / S);
+//   *x1 = V[0] * f;
+//   *x2 = V[1] * f;
+// }
+
+// // Версия random_displacements, которая использует детерминированную randn2
+// void random_displacements_sequential_deterministic(float* ax_, float* ay_, float* az_, unsigned short int config_, const float* randoms) {
+//   // УБИРАЕМ ПРОВЕРКУ, чтобы соответствовать поведению оригинального кода
+//   // if (config_ >= Nconfig || config_ == 65535 || param.T <= 0) { ... }
+
+//   float a1, a2, a3, a4, coeff;
+//   float* p;
+//   coeff = sqrtf(0.5f * param.T); // Используем sqrtf для float
+
+//   float V_set1[2] = {randoms[0], randoms[1]};
+//   float V_set2[2] = {randoms[2], randoms[3]};
+//   randn2_sequential_deterministic(&a1, &a2, V_set1);
+//   randn2_sequential_deterministic(&a3, &a4, V_set2);
+  
+//   p = transform_array[config_];
+//   *ax_ = coeff * (p[0] * a1 + p[3] * a2 + p[4] * a3);
+//   *ay_ = coeff * (p[3] * a1 + p[1] * a2 + p[5] * a3);
+//   *az_ = coeff * (p[4] * a1 + p[5] * a2 + p[2] * a3);
+// }
+
+// // Основная функция axyz из последовательной версии, адаптированная для теста
+// float3 axyz_sequential(int x, int y, int z, const float* randoms) {
+//   // Проверка на тип 0 была в оригинале, ее оставляем.
+//   if (atoms(x,y,z).type == 0) return {0.0f, 0.0f, 0.0f};
+  
+//   // УБИРАЕМ ПРОВЕРКУ на config, чтобы соответствовать поведению оригинального кода
+//   unsigned short int config_ = atoms(x,y,z).config;
+//   // if (config_ >= Nconfig || config_ == 65535) return {0.0f, 0.0f, 0.0f};
+
+//   // Используем float для всех вычислений, чтобы соответствовать GPU
+//   float ax_, ay_, az_, ax2, ay2, az2, A_xx, A_yy, A_zz, A_xy, A_xz, A_yz;
+//   float Bx, By, Bz, Bxx, Bxy, Bxz, Byx, Byy, Byz, Bzx, Bzy, Bzz;
+//   int dir;
+//   float* p;
+  
+//   p=AA_[config_]; 
+//   A_xx=p[0]; A_yy=p[1]; A_zz=p[2]; A_xy=p[3]; A_xz=p[4]; A_yz=p[5];
+  
+//   Bx=atoms(x,y,z).B0.x;
+//   By=atoms(x,y,z).B0.y;
+//   Bz=atoms(x,y,z).B0.z;
+
+//   neighbors_t nbs;
+//   atoms.neighbors(x,y,z,nbs);
+
+//   for (dir=0; dir<dir_number; dir++) {
+//     ax2=atoms(nbs.x[dir],nbs.y[dir],nbs.z[dir]).a.x;
+//     ay2=atoms(nbs.x[dir],nbs.y[dir],nbs.z[dir]).a.y;
+//     az2=atoms(nbs.x[dir],nbs.y[dir],nbs.z[dir]).a.z;
+//     p=BB[config_][dir];
+//     Bxx=p[0]; Bxy=p[1]; Bxz=p[2]; Byx=p[3]; Byy=p[4]; Byz=p[5]; Bzx=p[6]; Bzy=p[7]; Bzz=p[8]; 
+//     Bx+=Bxx*ax2+Bxy*ay2+Bxz*az2;
+//     By+=Byx*ax2+Byy*ay2+Byz*az2;
+//     Bz+=Bzx*ax2+Bzy*ay2+Bzz*az2;
+//   }
+
+//   ax_=ay_=az_=0.0f;
+//   random_displacements_sequential_deterministic(&ax_,&ay_,&az_,config_, randoms);
+//   ax_ -= 0.5f * ( A_xx*Bx+A_xy*By+A_xz*Bz );
+//   ay_ -= 0.5f * ( A_xy*Bx+A_yy*By+A_yz*Bz );
+//   az_ -= 0.5f * ( A_xz*Bx+A_yz*By+A_zz*Bz );
+  
+//   return {ax_, ay_, az_};
+// }
+
+// void run_comparison_test() {
+//     std::cout << "--- Running Bulk Atom Comparison Test (70 atoms) ---" << std::endl;
+
+//     if (spisok_atomov.empty()) {
+//         std::cout << "ERROR: spisok_atomov is empty. Cannot run test." << std::endl;
+//         return;
+//     }
+
+//     const int NUM_TEST_ATOMS = 70;
+//     if (spisok_atomov.size() < NUM_TEST_ATOMS) {
+//         std::cout << "ERROR: Not enough atoms in spisok_atomov to run test for " << NUM_TEST_ATOMS << " atoms." << std::endl;
+//         return;
+//     }
+
+//     std::vector<axyz_work_item_t> work_items;
+//     work_items.reserve(NUM_TEST_ATOMS);
+    
+//     // 1. Выбираем 70 случайных ВАЛИДНЫХ атомов для теста
+//     srand(0); // Фиксируем seed для выбора атомов
+//     while(work_items.size() < NUM_TEST_ATOMS) {
+//         int n = random_(spisok_atomov.size());
+//         coord c = spisok_atomov[n];
+//         const auto& atom = atoms(c.x, c.y, c.z);
+
+//         // Проверяем, что атом валидный (тип не 0)
+//         if (atom.type != 0) {
+//             axyz_work_item_t item;
+//             item.center_coords = c;
+//             item.center = atom;
+//             work_items.push_back(item);
+//         }
+//     }
+    
+//     std::cout << "Selected " << work_items.size() << " atoms for testing." << std::endl;
+    
+//     // 2. Генерируем для каждого атома свой набор случайных чисел
+//     // и заполняем данные о соседях
+//     float t = 1.0f / (RAND_MAX + 1.0f);
+//     neighbors_t nbs;
+//     for(auto& item : work_items) {
+//         for(int i=0; i<4; ++i) {
+//             item.random_numbers[i] = 2.0f * t * (rand() + t * rand()) - 1.0f;
+//         }
+//         atoms.neighbors(item.center_coords.x, item.center_coords.y, item.center_coords.z, nbs);
+//         for (int dir = 0; dir < dir_number; dir++) {
+//             item.neighbor_coords[dir] = {nbs.x[dir], nbs.y[dir], nbs.z[dir]};
+//             item.neighbors[dir] = atoms(nbs.x[dir], nbs.y[dir], nbs.z[dir]);
+//         }
+//     }
+
+//     // 3. Запускаем последовательную версию для всех атомов
+//     std::vector<float3> seq_results(NUM_TEST_ATOMS);
+//     for(int i=0; i < NUM_TEST_ATOMS; ++i) {
+//         seq_results[i] = axyz_sequential(
+//             work_items[i].center_coords.x,
+//             work_items[i].center_coords.y,
+//             work_items[i].center_coords.z,
+//             work_items[i].random_numbers
+//         );
+//     }
+
+//     // 4. Запускаем параллельную версию для всех атомов
+//     std::vector<axyz_result_t> par_results(NUM_TEST_ATOMS);
+//     int ochered_count;
+//     int max_ochered_size = NUM_TEST_ATOMS * (dir_number + 1);
+//     std::vector<int> dummy_ochered(max_ochered_size * 3);
+
+//     cuda_do_many_axyz_packed(
+//         work_items.data(), par_results.data(), NUM_TEST_ATOMS, param.T, 
+//         dummy_ochered.data(), dummy_ochered.data() + max_ochered_size, dummy_ochered.data() + 2*max_ochered_size, 
+//         &ochered_count, max_ochered_size
+//     );
+
+//     // 5. Выводим результаты и считаем суммарную ошибку
+//     std::cout << std::fixed << std::setprecision(8);
+//     double total_diff = 0.0;
+//     for(int i=0; i < NUM_TEST_ATOMS; ++i) {
+//         const auto& seq_res = seq_results[i];
+//         const auto& par_res = par_results[i].a;
+//         double dx = fabs(seq_res.x - par_res.x);
+//         double dy = fabs(seq_res.y - par_res.y);
+//         double dz = fabs(seq_res.z - par_res.z);
+//         total_diff += dx + dy + dz;
+
+//         if (dx + dy + dz > 1e-6) { // Печатаем только если есть заметная разница
+//             std::cout << "--- Mismatch found for atom " << i << " at (" 
+//                       << work_items[i].center_coords.x << "," << work_items[i].center_coords.y << "," << work_items[i].center_coords.z 
+//                       << ") config: " << work_items[i].center.config << " ---" << std::endl;
+//             std::cout << "  CPU result: (" << seq_res.x << ", " << seq_res.y << ", " << seq_res.z << ")" << std::endl;
+//             std::cout << "  GPU result: (" << par_res.x << ", " << par_res.y << ", " << par_res.z << ")" << std::endl;
+//             std::cout << "  Difference: (" << dx << ", " << dy << ", " << dz << ")" << std::endl;
+//         }
+//     }
+
+//     std::cout << "\n--- FINAL VERDICT ---" << std::endl;
+//     std::cout << "Total absolute difference over " << NUM_TEST_ATOMS << " atoms: " << total_diff << std::endl;
+//     if (total_diff < 1e-5) {
+//         std::cout << "SUCCESS: The results are consistent." << std::endl;
+//     } else {
+//         std::cout << "FAILURE: Significant difference found between CPU and GPU results." << std::endl;
+//     }
+
+//     exit(0);
+// }
 
 void main_loop(void) { // бесконечный цикл, состоящий из шагов Монте-Карло
   int i, n , step = 0;
@@ -210,6 +408,9 @@ void main_loop(void) { // бесконечный цикл, состоящий и
   }
 */
 //printf("main_loop: finished\n");
+
+  // // Прямо в начале цикла вызываем наш тест
+  //run_comparison_test(); 
 }
 
 
@@ -347,46 +548,73 @@ void do_many_axyz(int x0, int y0, int z0) {  // сделать "шевелени
 //   }
 // }
 void do_many_axyz(void) {
-  // printf("do_many_axyz: checking spisok_atomov before processing\n");
-  // size_t empty_count = 0;
-  // for (size_t i = 0; i < spisok_atomov.size(); i++) {
-  //     int x = spisok_atomov[i].x;
-  //     int y = spisok_atomov[i].y;
-  //     int z = spisok_atomov[i].z;
-  //     int atom_idx = z * Lx * Ly + y * Lx + x;
-  //     if (atoms.lat[atom_idx].type == 0) {
-  //         empty_count++;
-  //         printf("spisok_atomov[%zu]: (%d,%d,%d): type=%d, config=%u\n",
-  //                i, x, y, z, atoms.lat[atom_idx].type, atoms.lat[atom_idx].config);
-  //     }
-  // }
-  // printf("do_many_axyz: found %zu empty atoms in spisok_atomov\n", empty_count);
-
   int I = (int)(param.moves_percent / 100. * spisok_atomov.size());
-  //printf("do_many_axyz: I=%d, spisok_atomov.size=%zu\n", I, spisok_atomov.size());
-  if (I <= 0 || I > spisok_atomov.size()) {
-      printf("do_many_axyz: invalid I=%d, spisok_atomov.size=%zu\n", I, spisok_atomov.size());
-      exit(1);
+  if (I <= 0) {
+    return;
+  }
+  if (spisok_atomov.empty()) {
+    return;
   }
 
-  // Добавляем проверку точности
-  //verify_accuracy();
+  // Создаем векторы для "пакетов"
+  std::vector<axyz_work_item_t> work_items(I*2);
+  std::vector<axyz_result_t> results(I*2);
+  std::vector<int> global_indices(I*2);
 
-  struct coord* atoms_to_update = new struct coord[I];
+  neighbors_t nbs; // Структура для получения соседей
 
   for (int i = 0; i < I; i++) {
       struct coord c;
-      // Ищем атом с типом не равным 0
       do {
           int n = random_(spisok_atomov.size());
           c = spisok_atomov[n];
       } while (atoms(c.x, c.y, c.z).type == 0);
       
-      atoms_to_update[i] = c;
+      global_indices[i] = get_atom_idx_host(c.x, c.y, c.z, Lx, Ly, Lz);
+      work_items[i].center_coords = c;
+      work_items[i].center = atoms(c.x, c.y, c.z);
+
+      atoms.neighbors(c.x, c.y, c.z, nbs); // Получаем соседей
+
+      for (int dir = 0; dir < dir_number; dir++) {
+          const int& x2 = nbs.x[dir];
+          const int& y2 = nbs.y[dir];
+          const int& z2 = nbs.z[dir];
+          work_items[i].neighbor_coords[dir] = {x2, y2, z2};
+          work_items[i].neighbors[dir] = atoms(x2, y2, z2);
+      }
   }
-  //printf("Количество атомов на обновление = %d\n",I);
-  cuda_do_many_axyz(atoms_to_update, I, atoms.lat, Lx, Ly, Lz, param.T, &AA_[0][0], &BB[0][0][0], &transform_array[0][0]);
+
+  // Готовим буферы для очереди
+  int max_ochered_size = I * (dir_number + 1);
+  std::vector<int> host_ochered_x(max_ochered_size);
+  std::vector<int> host_ochered_y(max_ochered_size);
+  std::vector<int> host_ochered_z(max_ochered_size);
+  int ochered_count = 0;
+
+  // Вызываем "пакетную" CUDA-функцию
+  cuda_do_many_axyz_packed(
+      work_items.data(), results.data(), I, param.T,
+      host_ochered_x.data(), host_ochered_y.data(), host_ochered_z.data(),
+      &ochered_count, max_ochered_size
+  );
+
+  // Обрабатываем результаты: обновляем главный массив атомов
+  for (int i = 0; i < I; i++) {
+      atoms.lat[global_indices[i]].a.x = results[i].a.x;
+      atoms.lat[global_indices[i]].a.y = results[i].a.y;
+      atoms.lat[global_indices[i]].a.z = results[i].a.z;
+  }
+
   current.n_moves += I;
-  //printf("do_many_axyz: finished, n_moves=%d\n", current.n_moves);
-  delete[] atoms_to_update;
+
+  // Обрабатываем очередь
+  for (int j = 0; j < ochered_count; j++) {
+      if (host_ochered_x[j] < 0 || host_ochered_x[j] >= Lx ||
+          host_ochered_y[j] < 0 || host_ochered_y[j] >= Ly ||
+          host_ochered_z[j] < 0 || host_ochered_z[j] >= Lz) {
+          continue;
+      }
+      v_ochered_Edef(host_ochered_x[j], host_ochered_y[j], host_ochered_z[j]);
+  }
 }
