@@ -16,7 +16,6 @@ atom_t* dev_atoms_read = nullptr;
 atom_t* dev_atoms_write = nullptr;
 float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
 curandState* dev_states = nullptr;
-int *dev_xs = nullptr, *dev_ys = nullptr, *dev_zs = nullptr;
 int *dev_ochered_count = nullptr, *dev_ochered_x = nullptr, *dev_ochered_y = nullptr, *dev_ochered_z = nullptr;
 
 static int max_atoms_to_update_size = 0;
@@ -250,9 +249,8 @@ __global__ void axyz_kernel_packed(
     }
 }
 
-extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, 
-                          float* host_AA_, float* host_BB, float* host_transform_array, 
-                          int max_atoms) 
+extern "C" void cuda_init(float* host_AA_, float* host_BB, float* host_transform_array, 
+                          int max_atoms,float moves_percent) 
 {
     // --- Global, static-sized arrays ---
     size_t atoms_size = Lx * Ly * Lz * sizeof(atom_t);
@@ -260,8 +258,6 @@ extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms,
     size_t BB_size = Nconfig * dir_number * 9 * sizeof(float);
     size_t transform_size = Nconfig * 6 * sizeof(float);
 
-    cudaMalloc(&dev_atoms_read, atoms_size);
-    cudaMalloc(&dev_atoms_write, atoms_size);
     cudaMalloc(&dev_AA_, AA_size);
     cudaMalloc(&dev_BB, BB_size);
     cudaMalloc(&dev_transform_array, transform_size);
@@ -272,17 +268,13 @@ extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms,
     cudaMemcpy(dev_transform_array, host_transform_array, transform_size, cudaMemcpyHostToDevice);
     
     // --- Workspace buffers, sized for 2% of total atoms as a safety margin ---
-    int atoms_to_update_size = (int)(max_atoms * 0.02);
+    int atoms_to_update_size = (int)(max_atoms * (moves_percent/ 100.0f + 0.02f));
     if (atoms_to_update_size < 128) atoms_to_update_size = 128; // Set a minimum 
     
     printf("Allocating CUDA work buffers for up to %d atoms (2%% of total).\n", atoms_to_update_size);
     max_atoms_to_update_size = atoms_to_update_size;
 
     cudaMalloc(&dev_states, atoms_to_update_size * sizeof(curandState));
-    cudaMalloc(&dev_xs, atoms_to_update_size * sizeof(int));
-    cudaMalloc(&dev_ys, atoms_to_update_size * sizeof(int));
-    cudaMalloc(&dev_zs, atoms_to_update_size * sizeof(int));
-
     max_ochered_size_allocated = atoms_to_update_size * (dir_number + 1);
     cudaMalloc(&dev_ochered_count, sizeof(int));
     cudaMalloc(&dev_ochered_x, max_ochered_size_allocated * sizeof(int));
@@ -331,9 +323,6 @@ extern "C" void cuda_cleanup() {
     cudaFree(dev_BB);
     cudaFree(dev_transform_array);
     cudaFree(dev_states);
-    cudaFree(dev_xs);
-    cudaFree(dev_ys);
-    cudaFree(dev_zs);
     cudaFree(dev_ochered_count);
     cudaFree(dev_ochered_x);
     cudaFree(dev_ochered_y);

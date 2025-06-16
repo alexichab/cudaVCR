@@ -29,7 +29,7 @@ struct axyz_result_t {
 };
 
 extern "C" {
-    void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms, float* host_AA_, float* host_BB, float* host_transform_array, int max_atoms);
+    void cuda_init(float* host_AA, float* host_BB, float* host_transform_array, int max_total_atoms, float moves_percent);
     void cuda_cleanup();
     void cuda_sync_atoms(atom_t* host_atoms, int Lx, int Ly, int Lz);
     void cuda_do_many_axyz(struct coord* atoms_to_update, int count, atom_t* host_atoms, int Lx, int Ly, int Lz, float T,
