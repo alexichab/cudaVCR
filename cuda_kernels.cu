@@ -24,28 +24,6 @@ static double total_cuda_time_ms = 0.0;
 static int g_optimal_block_size = 0;
 
 
-// __host__ __device__ void convert(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
-//     lx = x;
-//     ly = ((y >> 2) << 1) + ((y & 0x3) >> 1);
-//     lz = z;
-// }
-// __host__ __device__ int get_atom_idx(int x, int y, int z, int Lx, int Ly, int Lz) {
-//     int lx, ly, lz;
-//     convert(x, y, z, Lx, Ly, lx, ly, lz);
-//     return (long)lz * (Ly / 2) * Lx + (long)ly * Lx + lx;
-// }
-// __host__ void convert_host(int x, int y, int z, int Lx, int Ly, int &lx, int &ly, int &lz) {
-//     lx = x;
-//     ly = ((y >> 2) << 1) + ((y & 0x3) >> 1);
-//     lz = z;
-// }
-
-// __host__ int get_atom_idx_host(int x, int y, int z, int Lx, int Ly, int Lz) {
-//     int lx, ly, lz;
-//     convert_host(x, y, z, Lx, Ly, lx, ly, lz);
-//     return (long)lz * (Ly / 2) * Lx + (long)ly * Lx + lx;
-// }
-
 __device__ void calc_neighbor_coords(int x, int y, int z, int dir, int Lx, int Ly, int Lz, int* x2, int* y2, int* z2) {
     int factor = (z % 2 == 0) ? 1 : -1;
     const int dx[16] = {1, 1, -1, -1, 0, 2, 2, 0, 2, 2, 0, -2, -2, 0, -2, -2};
@@ -73,17 +51,6 @@ __device__ void randn2_gpu(float* x1, float* x2, curandState* state) {
     *x2 = V2 * f;
 }
 
-
-// __device__ void randn2_gpu_deterministic(float* x1, float* x2, const float* V) {
-//     float S = V[0] * V[0] + V[1] * V[1];
-//     if (S >= 1.0f || S == 0.0f) {
-//         *x1 = 0.0f; *x2 = 0.0f; return;
-//     }
-//     float f = sqrtf(-2.0f * logf(S) / S);
-//     *x1 = V[0] * f;
-//     *x2 = V[1] * f;
-// }
-
 __device__ void random_displacements_gpu(float* ax_, float* ay_, float* az_, unsigned short int config_, float* transform_array_ptr, curandState* state, float T) {
     float a1, a2, a3, a4, coeff;
     coeff = sqrtf(0.5f * T);
@@ -95,72 +62,11 @@ __device__ void random_displacements_gpu(float* ax_, float* ay_, float* az_, uns
     *az_ = coeff * (transform_array_ptr[4] * a1 + transform_array_ptr[5] * a2 + transform_array_ptr[2] * a3);
 }
 
-// __device__ void random_displacements_gpu_deterministic(float* ax_, float* ay_, float* az_, unsigned short int config_, float* transform_array_ptr, const float* randoms, float T) {
-//     float coeff = sqrtf(0.5f * T);
-    
-//     float a1, a2, a3, a4;
-//     const float V_set1[2] = {randoms[0], randoms[1]};
-//     const float V_set2[2] = {randoms[2], randoms[3]};
-//     randn2_gpu_deterministic(&a1, &a2, V_set1);
-//     randn2_gpu_deterministic(&a3, &a4, V_set2);
-    
-//     *ax_ = coeff * (transform_array_ptr[0] * a1 + transform_array_ptr[3] * a2 + transform_array_ptr[4] * a3);
-//     *ay_ = coeff * (transform_array_ptr[3] * a1 + transform_array_ptr[1] * a2 + transform_array_ptr[5] * a3);
-//     *az_ = coeff * (transform_array_ptr[4] * a1 + transform_array_ptr[5] * a2 + transform_array_ptr[2] * a3);
-// }
-
-// __device__ unsigned short massiv_to_config1(int* nb_type) {
-//     unsigned short conf = 0;
-//     for (int i = 0; i < dir_number; i++) {
-//         conf <<= 1;
-//         conf += (nb_type[i] != 0);
-//     }
-//     return conf;
-// }
-
 __global__ void setup_kernel(curandState* state, unsigned long seed, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) {return;}
     curand_init(seed, idx, 0, &state[idx]);
 }
-
-
-// __global__ void set_config_kernel(
-//     atom_t* dev_atoms, int Lx, int Ly, int Lz,
-//     int* xs, int* ys, int* zs, int count)
-// {
-//     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-//     if (idx >= count) return;
-
-//     int x = xs[idx];
-//     int y = ys[idx];
-//     int z = zs[idx];
-//     int atom_idx = get_atom_idx(x, y, z, Lx, Ly, Lz);
-
-//     int nb_type[16];
-//     for (int dir = 0; dir < dir_number; dir++) {
-//         int x2, y2, z2;
-//         calc_neighbor_coords(x, y, z, dir, Lx, Ly, Lz, &x2, &y2, &z2);
-//         int nb_idx = get_atom_idx(x2, y2, z2, Lx, Ly, Lz);
-//         nb_type[dir] = dev_atoms[nb_idx].type;
-//     }
-
-//     unsigned short new_config = massiv_to_config1(nb_type);
-//     dev_atoms[atom_idx].config = new_config;
-
-    // // Debug print для первых 10 потоков
-    // if (idx < 10) {
-    //     printf("set_config_kernel - Thread %d: atom at (%d,%d,%d) got new config_=%d\n", 
-    //            idx, x, y, z, new_config);
-        
-    //     // Выводим типы соседей
-    //     printf("  Neighbor types: ");
-    //     for (int dir = 0; dir < dir_number; dir++) {
-    //         printf("%d ", nb_type[dir]);
-    //     }
-    //     printf("\n");
-    // }
-//}
 
 __global__ void axyz_kernel_packed(
     const axyz_work_item_t* work_items,
@@ -214,15 +120,8 @@ __global__ void axyz_kernel_packed(
             coord nb_coords = item.neighbor_coords[dir];
             d_ochered_x[ochered_idx] = nb_coords.x;
             d_ochered_y[ochered_idx] = nb_coords.y;
-            d_ochered_z[ochered_idx] = nb_coords.z;
-               // Выводим информацию о добавленном соседе (только для первого потока)
-            // if (idx == 0) {
-            //     printf("[GPU Kernel] Thread 0: Adding NEIGHBOR dir=%d at (%d, %d, %d) to queue.\n",
-            //            dir, nb_coords.x, nb_coords.y, nb_coords.z);
-            // }
-        
+            d_ochered_z[ochered_idx] = nb_coords.z;        
         }
-        
     }
 
     float ax_, ay_, az_;
@@ -242,10 +141,6 @@ __global__ void axyz_kernel_packed(
         d_ochered_x[ochered_idx] = item.center_coords.x;
         d_ochered_y[ochered_idx] = item.center_coords.y;
         d_ochered_z[ochered_idx] = item.center_coords.z;
-        //  if (idx == 0) {
-        //     printf("[GPU Kernel] Thread 0: Adding CENTER atom at (%d, %d, %d) to queue.\n",
-        //            item.center_coords.x, item.center_coords.y, item.center_coords.z);
-        // }
     }
 }
 
