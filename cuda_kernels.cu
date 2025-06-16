@@ -2,6 +2,7 @@
 #include <device_launch_parameters.h>
 #include <curand_kernel.h>
 #include "cuda_kernels.h"
+#include "mc_growth.h"
 #include <chrono>
 
 #define CUDA_CHECK(err) { \
@@ -82,7 +83,11 @@ __device__ void random_displacements_gpu(float* ax_, float* ay_, float* az_, uns
     coeff = sqrtf(0.5f * T);
     randn2_gpu(&a1, &a2, state);
     randn2_gpu(&a3, &a4, state);
-    float* p = transform_array + config_ * 6;
+    
+    // Получаем указатель на начало массива для текущего config_, как в последовательной версии
+    float* p = &transform_array[config_ * 6];
+    
+    // Используем тот же подход, что и в последовательной версии
     *ax_ = coeff * (p[0] * a1 + p[3] * a2 + p[4] * a3);
     *ay_ = coeff * (p[3] * a1 + p[1] * a2 + p[5] * a3);
     *az_ = coeff * (p[4] * a1 + p[5] * a2 + p[2] * a3);
@@ -123,7 +128,21 @@ __global__ void set_config_kernel(
         nb_type[dir] = dev_atoms[nb_idx].type;
     }
 
-    dev_atoms[atom_idx].config = massiv_to_config1(nb_type);
+    unsigned short new_config = massiv_to_config1(nb_type);
+    dev_atoms[atom_idx].config = new_config;
+
+    // // Debug print для первых 10 потоков
+    // if (idx < 10) {
+    //     printf("set_config_kernel - Thread %d: atom at (%d,%d,%d) got new config_=%d\n", 
+    //            idx, x, y, z, new_config);
+        
+    //     // Выводим типы соседей
+    //     printf("  Neighbor types: ");
+    //     for (int dir = 0; dir < dir_number; dir++) {
+    //         printf("%d ", nb_type[dir]);
+    //     }
+    //     printf("\n");
+    // }
 }
 
 // Ядро для обновления смещений атомов
@@ -141,29 +160,52 @@ __global__ void axyz_kernel(
     int z = zs[idx];
     int atom_idx = get_atom_idx(x, y, z, Lx, Ly, Lz);
 
+    // Добавь проверку на выход за границы
+   
     if (atoms_read[atom_idx].type == 0) return;
 
     unsigned short config_ = atoms_write[atom_idx].config;
-    if (config_ >= Nconfig || config_ == 65535) return;
-    // ВОТ ТУТ НИЖЕ СКОРЕЕ ВСЕГО ЛАЖА
-    __shared__ float shared_AA[6];
-    __shared__ float shared_transform[6];
-    if (threadIdx.x < 6) {
-        shared_AA[threadIdx.x] = d_AA_[config_ * 6 + threadIdx.x];
-        shared_transform[threadIdx.x] = d_transform_array[config_ * 6 + threadIdx.x];
+    if (config_ >= Nconfig || config_ == 65535) {
+        //printf("Ошибка: config_=%d превышает Nconfig=%d или равно 65535 (idx=%d)\n", config_, Nconfig, idx);
+        return;
     }
-    __syncthreads();
+    if (config_ * 6 + 5 >= Nconfig * 6) {
+        //printf("Ошибка: config_=%d выходит за пределы d_AA_ или d_transform_array (Nconfig=%d, idx=%d)\n", config_, Nconfig, idx);
+        return;
+    }
 
-    float A_xx = shared_AA[0];
-    float A_yy = shared_AA[1];
-    float A_zz = shared_AA[2];
-    float A_xy = shared_AA[3];
-    float A_xz = shared_AA[4];
-    float A_yz = shared_AA[5];
+    // // Debug print для всех потоков
+    // if (idx < 10) { // Выводим для первых 10 потоков
+    //     printf("Thread %d: atom at (%d,%d,%d) has config_=%d\n", 
+    //            idx, x, y, z, config_);
+    // }
+
+    // Получаем указатели на начало массивов для текущего config_
+    float* AA_p = &d_AA_[config_ * 6];
+    float* transform_p = &d_transform_array[config_ * 6];
+
+    // Прямой доступ к элементам массива, как в последовательной версии
+    float A_xx = AA_p[0];
+    float A_yy = AA_p[1];
+    float A_zz = AA_p[2];
+    float A_xy = AA_p[3];
+    float A_xz = AA_p[4];
+    float A_yz = AA_p[5];
+
+    // // Debug print
+    // if (idx == 0) {
+    //     printf("Debug: config_=%d, AA_p[0]=%f,AA_p[1]=%f,AA_p[2]=%f,AA_p[3]=%f,AA_p[4]=%f,AA_p[5]=%f, transform_p[0]=%f\n", 
+    //            config_, AA_p[0],AA_p[1],AA_p[2],AA_p[2],AA_p[3],AA_p[4],AA_p[5], transform_p[0]);
+    // }
 
     float Bx = atoms_read[atom_idx].B0.x;
     float By = atoms_read[atom_idx].B0.y;
     float Bz = atoms_read[atom_idx].B0.z;
+
+    // Debug print для начальных значений B
+    // if (idx == 0) {
+    //     printf("Debug: Initial B values: Bx=%f, By=%f, Bz=%f\n", Bx, By, Bz);
+    // }
 
     for (int dir = 0; dir < dir_number; dir++) {
         int x2, y2, z2;
@@ -179,10 +221,24 @@ __global__ void axyz_kernel(
             float ay2 = atoms_read[neighbor_idx].a.y;
             float az2 = atoms_read[neighbor_idx].a.z;
 
-            float* BB_ptr = d_BB + config_ * dir_number * 9 + dir * 9;
-            Bx += BB_ptr[0] * ax2 + BB_ptr[1] * ay2 + BB_ptr[2] * az2;
-            By += BB_ptr[3] * ax2 + BB_ptr[4] * ay2 + BB_ptr[5] * az2;
-            Bz += BB_ptr[6] * ax2 + BB_ptr[7] * ay2 + BB_ptr[8] * az2;
+            // Получаем указатель на нужный блок BB для текущего config_ и dir
+            float* BB_p = &d_BB[(config_ * dir_number + dir) * 9];
+
+            // Debug print для BB значений
+            if (idx == 0 && dir == 0) {
+                printf("Debug: config_=%d, dir=%d, BB values: %f,%f,%f,%f,%f,%f,%f,%f,%f\n", 
+                       config_, dir, BB_p[0], BB_p[1], BB_p[2], BB_p[3], BB_p[4], 
+                       BB_p[5], BB_p[6], BB_p[7], BB_p[8]);
+            }
+
+            Bx += BB_p[0] * ax2 + BB_p[1] * ay2 + BB_p[2] * az2;
+            By += BB_p[3] * ax2 + BB_p[4] * ay2 + BB_p[5] * az2;
+            Bz += BB_p[6] * ax2 + BB_p[7] * ay2 + BB_p[8] * az2;
+
+            // Debug print для обновленных значений B после каждого соседа
+            // if (idx == 0) {
+            //     printf("Debug: After neighbor dir=%d: Bx=%f, By=%f, Bz=%f\n", dir, Bx, By, Bz);
+            // }
 
             // соседа в очередь
             int ochered_idx = atomicAdd(d_ochered_count, 1);
@@ -195,8 +251,12 @@ __global__ void axyz_kernel(
     }
 
     float ax_, ay_, az_;
-    //И ТУТ ВОЗМОЖНО ЛАЖА и изза этого или сверху, выходим за границы!!!
-    random_displacements_gpu(&ax_, &ay_, &az_, config_, shared_transform, &states[idx], T);
+    random_displacements_gpu(&ax_, &ay_, &az_, config_, transform_p, &states[idx], T);
+    
+    // Debug print
+    // if (idx == 0) {
+    //     printf("Debug: After random_displacements_gpu: ax_=%f, ay_=%f, az_=%f\n", ax_, ay_, az_);
+    // }
 
     ax_ -= 0.5f * (A_xx * Bx + A_xy * By + A_xz * Bz);
     ay_ -= 0.5f * (A_xy * Bx + A_yy * By + A_yz * Bz);
@@ -235,10 +295,12 @@ extern "C" void cuda_init(int Lx, int Ly, int Lz, atom_t* host_atoms,
     
     cudaMemcpy(dev_atoms_read, host_atoms, atoms_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_atoms_write, host_atoms, atoms_size, cudaMemcpyHostToDevice);
+    
+    // Copy AA_, BB and transform_array data
     cudaMemcpy(dev_AA_, host_AA_, AA_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_BB, host_BB, BB_size, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_transform_array, host_transform_array, transform_size, cudaMemcpyHostToDevice);
-
+    
     // --- Workspace buffers, sized for 2% of total atoms as a safety margin ---
     int atoms_to_update_size = (int)(max_atoms * 0.02);
     if (atoms_to_update_size < 128) atoms_to_update_size = 128; // Set a minimum 
@@ -339,10 +401,18 @@ extern "C" void cuda_do_many_axyz(
     //     printf("  Solution: Increase the percentage in cuda_init() or decrease 'param.moves_percent'.\n\n");
     //     exit(EXIT_FAILURE);
     // }
-
+   
     auto start_time = std::chrono::high_resolution_clock::now();
 
     cuda_sync_atoms(host_atoms, Lx, Ly, Lz);
+    
+    // Sync AA_, BB and transform_array data
+    size_t AA_size = Nconfig * 6 * sizeof(float);
+    size_t BB_size = Nconfig * dir_number * 9 * sizeof(float);
+    size_t transform_size = Nconfig * 6 * sizeof(float);
+    cudaMemcpy(dev_AA_, host_AA_, AA_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_BB, host_BB, BB_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_transform_array, host_transform_array, transform_size, cudaMemcpyHostToDevice);
 
     int* host_xs = new int[count];
     int* host_ys = new int[count];
@@ -376,24 +446,23 @@ extern "C" void cuda_do_many_axyz(
     dim3 block(block_size);
     dim3 grid((count + block.x - 1) / block.x);
 
-    //printf("Dynamic CUDA Launch: Atoms=%d -> BlockSize=%d, GridSize=%d\n", count, block_size, grid.x);
+    printf("Dynamic CUDA Launch: Atoms=%d -> BlockSize=%d, GridSize=%d\n", count, block_size, grid.x);
     int max_ochered_size = count * (dir_number + 1);
     int zero = 0;
     cudaMemcpy(dev_ochered_count, &zero, sizeof(int), cudaMemcpyHostToDevice);
 
-    set_config_kernel<<<grid, block>>>(dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count);
-
     axyz_kernel<<<grid, block>>>(dev_atoms_read, dev_atoms_write, Lx, Ly, Lz, dev_xs, dev_ys, dev_zs, count, dev_states, T,
                                  dev_AA_, dev_BB, dev_transform_array,
                                  dev_ochered_x, dev_ochered_y, dev_ochered_z, dev_ochered_count, max_ochered_size);
-    
+    CUDA_CHECK(cudaGetLastError());
+
     // cudaEventRecord(stop_event, 0);
     // cudaEventSynchronize(stop_event);
 
     // float cuda_time_ms;
     // cudaEventElapsedTime(&cuda_time_ms, start_event, stop_event);
     // total_cuda_time_ms += cuda_time_ms;
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // Копируем обновлённые атомы обратно на хост
     for (int i = 0; i < count; i++) {

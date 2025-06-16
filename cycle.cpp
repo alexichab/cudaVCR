@@ -43,6 +43,7 @@ void main_loop(void) { // бесконечный цикл, состоящий и
     }
 		ZXY v_ochered_Edef(x,y,z);
 		update_Edef();
+    cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0], spisok_atomov.size());
     //printf("main_loop: displacements initialized, spisok_atomov.size=%zu\n", spisok_atomov.size());
 	}
 

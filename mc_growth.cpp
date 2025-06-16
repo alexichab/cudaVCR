@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
     printf("main: sizeof(atom_t)=%zu, spisok_atomov.size=%zu\n", sizeof(atom_t), spisok_atomov.size());
     //cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0],max_atoms);
     //cuda_sync_atoms(atoms.lat, Lx, Ly, Lz);
-    printf("main: cuda_init done, max_atoms=%d\n", max_atoms);
+    //printf("main: cuda_init done, max_atoms=%d\n", max_atoms);
   }
   
 
@@ -195,7 +195,6 @@ int main(int argc, char** argv) {
   // std::cout << "Sample AA_ data [10][0]: " << AA_[10][0] << std::endl;
   // std::cout << "---------------------------------------\n\n";
 
-  cuda_init(Lx, Ly, Lz, atoms.lat, &AA_[0][0], &BB[0][0][0], &transform_array[0][0], spisok_atomov.size());
   main_loop();
   cuda_cleanup();
   comp.finish();
