@@ -216,7 +216,14 @@ __global__ void axyz_kernel_packed(
             d_ochered_x[ochered_idx] = nb_coords.x;
             d_ochered_y[ochered_idx] = nb_coords.y;
             d_ochered_z[ochered_idx] = nb_coords.z;
+               // Выводим информацию о добавленном соседе (только для первого потока)
+            // if (idx == 0) {
+            //     printf("[GPU Kernel] Thread 0: Adding NEIGHBOR dir=%d at (%d, %d, %d) to queue.\n",
+            //            dir, nb_coords.x, nb_coords.y, nb_coords.z);
+            // }
+        
         }
+        
     }
 
     float ax_, ay_, az_;
@@ -236,6 +243,10 @@ __global__ void axyz_kernel_packed(
         d_ochered_x[ochered_idx] = item.center_coords.x;
         d_ochered_y[ochered_idx] = item.center_coords.y;
         d_ochered_z[ochered_idx] = item.center_coords.z;
+        //  if (idx == 0) {
+        //     printf("[GPU Kernel] Thread 0: Adding CENTER atom at (%d, %d, %d) to queue.\n",
+        //            item.center_coords.x, item.center_coords.y, item.center_coords.z);
+        // }
     }
 }
 
@@ -316,8 +327,6 @@ extern "C" void cuda_cleanup() {
     printf("\n===========================================================\n");
     printf("Total time spent in all cuda_do_many_axyz calls: %.4f ms\n", total_cuda_time_ms);
     printf("===========================================================\n\n");
-    // cudaFree(dev_atoms_read);
-    // cudaFree(dev_atoms_write);
     cudaFree(dev_AA_);
     cudaFree(dev_BB);
     cudaFree(dev_transform_array);
@@ -330,12 +339,6 @@ extern "C" void cuda_cleanup() {
     cudaFree(dev_ochered_y);
     cudaFree(dev_ochered_z);
 }
-
-// extern "C" void cuda_sync_atoms(atom_t* host_atoms, int Lx, int Ly, int Lz) {
-//     size_t atoms_size = Lx * Ly * Lz * sizeof(atom_t);
-//     cudaMemcpy(dev_atoms_read, host_atoms, atoms_size, cudaMemcpyHostToDevice);
-//     cudaMemcpy(dev_atoms_write, host_atoms, atoms_size, cudaMemcpyHostToDevice);
-// }
 
 extern "C" void cuda_do_many_axyz_packed(
     const axyz_work_item_t* host_work_items,
@@ -378,7 +381,7 @@ extern "C" void cuda_do_many_axyz_packed(
         dev_ochered_x, dev_ochered_y, dev_ochered_z, dev_ochered_count, max_ochered_size
     );
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    cudaDeviceSynchronize();
 
     cudaMemcpy(host_results, dev_results, count * sizeof(axyz_result_t), cudaMemcpyDeviceToHost);
     
@@ -386,7 +389,7 @@ extern "C" void cuda_do_many_axyz_packed(
     cudaMemcpy(&ochered_count_gpu, dev_ochered_count, sizeof(int), cudaMemcpyDeviceToHost);
     ochered_count_gpu = min(ochered_count_gpu, max_ochered_size);
     *out_host_ochered_count = ochered_count_gpu;
- if (ochered_count_gpu > 0) {
+    if (ochered_count_gpu > 0) {
         cudaMemcpy(host_ochered_x, dev_ochered_x, ochered_count_gpu * sizeof(int), cudaMemcpyDeviceToHost);
         cudaMemcpy(host_ochered_y, dev_ochered_y, ochered_count_gpu * sizeof(int), cudaMemcpyDeviceToHost);
         cudaMemcpy(host_ochered_z, dev_ochered_z, ochered_count_gpu * sizeof(int), cudaMemcpyDeviceToHost);

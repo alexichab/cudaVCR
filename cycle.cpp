@@ -599,22 +599,19 @@ void do_many_axyz(void) {
       &ochered_count, max_ochered_size
   );
 
-  // Обрабатываем результаты: обновляем главный массив атомов
+  // Update atoms on CPU with results from GPU
   for (int i = 0; i < I; i++) {
-      atoms.lat[global_indices[i]].a.x = results[i].a.x;
-      atoms.lat[global_indices[i]].a.y = results[i].a.y;
-      atoms.lat[global_indices[i]].a.z = results[i].a.z;
+      coord c = work_items[i].center_coords;
+      atoms(c.x, c.y, c.z).a.x = results[i].a.x;
+      atoms(c.x, c.y, c.z).a.y = results[i].a.y;
+      atoms(c.x, c.y, c.z).a.z = results[i].a.z;
   }
-
-  current.n_moves += I;
-
-  // Обрабатываем очередь
+  
+  // Добавляем атомы и их соседей в очередь на обновление энергии
   for (int j = 0; j < ochered_count; j++) {
-      if (host_ochered_x[j] < 0 || host_ochered_x[j] >= Lx ||
-          host_ochered_y[j] < 0 || host_ochered_y[j] >= Ly ||
-          host_ochered_z[j] < 0 || host_ochered_z[j] >= Lz) {
-          continue;
-      }
+   //printf("Count of ochered: %d\n",ochered_count);
       v_ochered_Edef(host_ochered_x[j], host_ochered_y[j], host_ochered_z[j]);
   }
+  current.n_moves += I;
+
 }
