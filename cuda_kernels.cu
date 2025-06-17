@@ -11,9 +11,8 @@
         exit(EXIT_FAILURE); \
     } \
 }
-
-atom_t* dev_atoms_read = nullptr;
-atom_t* dev_atoms_write = nullptr;
+axyz_work_item_t* dev_work_items;
+axyz_result_t* dev_results;
 float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
 curandState* dev_states = nullptr;
 int *dev_ochered_count = nullptr, *dev_ochered_x = nullptr, *dev_ochered_y = nullptr, *dev_ochered_z = nullptr;
@@ -152,7 +151,7 @@ extern "C" void cuda_init(float* host_AA_, float* host_BB, float* host_transform
     size_t AA_size = Nconfig * 6 * sizeof(float);
     size_t BB_size = Nconfig * dir_number * 9 * sizeof(float);
     size_t transform_size = Nconfig * 6 * sizeof(float);
-
+        
     cudaMalloc(&dev_AA_, AA_size);
     cudaMalloc(&dev_BB, BB_size);
     cudaMalloc(&dev_transform_array, transform_size);
@@ -165,7 +164,10 @@ extern "C" void cuda_init(float* host_AA_, float* host_BB, float* host_transform
     // --- Workspace buffers, sized for 2% of total atoms as a safety margin ---
     int atoms_to_update_size = (int)(max_atoms * (moves_percent/ 100.0f + 0.02f));
     if (atoms_to_update_size < 128) atoms_to_update_size = 128; // Set a minimum 
-    
+        
+    cudaMalloc(&dev_work_items, atoms_to_update_size * sizeof(axyz_work_item_t));
+    cudaMalloc(&dev_results, atoms_to_update_size * sizeof(axyz_result_t));
+
     printf("Allocating CUDA work buffers for up to %d atoms (2%% of total).\n", atoms_to_update_size);
     max_atoms_to_update_size = atoms_to_update_size;
 
@@ -222,6 +224,8 @@ extern "C" void cuda_cleanup() {
     cudaFree(dev_ochered_x);
     cudaFree(dev_ochered_y);
     cudaFree(dev_ochered_z);
+    cudaFree(dev_work_items);
+    cudaFree(dev_results);
 }
 
 extern "C" void cuda_do_many_axyz_packed(
@@ -245,11 +249,6 @@ extern "C" void cuda_do_many_axyz_packed(
     }
 
     auto start_time = std::chrono::high_resolution_clock::now();
-    axyz_work_item_t* dev_work_items;
-    axyz_result_t* dev_results;
-    cudaMalloc(&dev_work_items, count * sizeof(axyz_work_item_t));
-    cudaMalloc(&dev_results, count * sizeof(axyz_result_t));
-
     cudaMemcpy(dev_work_items, host_work_items, count * sizeof(axyz_work_item_t), cudaMemcpyHostToDevice);
 
     int zero = 0;
@@ -278,9 +277,6 @@ extern "C" void cuda_do_many_axyz_packed(
         cudaMemcpy(host_ochered_y, dev_ochered_y, ochered_count_gpu * sizeof(int), cudaMemcpyDeviceToHost);
         cudaMemcpy(host_ochered_z, dev_ochered_z, ochered_count_gpu * sizeof(int), cudaMemcpyDeviceToHost);
     }
-    
-    cudaFree(dev_work_items);
-    cudaFree(dev_results);
     
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> elapsed_ms = end_time - start_time;
