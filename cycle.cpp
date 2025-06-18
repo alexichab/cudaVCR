@@ -13,7 +13,6 @@
 extern float AA_[Nconfig][6];
 extern float BB[Nconfig][dir_number][9];
 extern float transform_array[Nconfig][6];
-
 void mc_step(void);   // шаг Монте-Карло
 double calc_P_jump_sum(void); // сосчитать суммарную вероятность всех прыжков
 void choose_jump(double P_jump_sum, int* x, int* y, int* z, int* dir); // выбрать прыжок
@@ -557,9 +556,9 @@ void do_many_axyz(void) {
   }
 
   // Создаем векторы для "пакетов"
-  std::vector<axyz_work_item_t> work_items(I*2);
-  std::vector<axyz_result_t> results(I*2);
-  std::vector<int> global_indices(I*2);
+  std::vector<axyz_work_item_t> work_items(I);
+  std::vector<axyz_result_t> results(I);
+  std::vector<int> global_indices(I);
 
   neighbors_t nbs; // Структура для получения соседей
 

@@ -15,7 +15,7 @@ axyz_work_item_t* dev_work_items;
 axyz_result_t* dev_results;
 float *dev_AA_ = nullptr, *dev_BB = nullptr, *dev_transform_array = nullptr;
 curandState* dev_states = nullptr;
-int *dev_ochered_count = nullptr, *dev_ochered_x = nullptr, *dev_ochered_y = nullptr, *dev_ochered_z = nullptr;
+int *dev_ochered_x = nullptr, *dev_ochered_y = nullptr, *dev_ochered_z = nullptr;
 
 static int max_atoms_to_update_size = 0;
 static int max_ochered_size_allocated = 0;
@@ -23,20 +23,6 @@ static double total_cuda_time_ms = 0.0;
 static int g_optimal_block_size = 0;
 
 
-__device__ void calc_neighbor_coords(int x, int y, int z, int dir, int Lx, int Ly, int Lz, int* x2, int* y2, int* z2) {
-    int factor = (z % 2 == 0) ? 1 : -1;
-    const int dx[16] = {1, 1, -1, -1, 0, 2, 2, 0, 2, 2, 0, -2, -2, 0, -2, -2};
-    const int dy[16] = {1, -1, 1, -1, 2, 0, 2, -2, 0, -2, 2, 0, 2, -2, 0, -2};
-    const int dz[16] = {1, -1, -1, 1, 2, 2, 0, -2, -2, 0, -2, -2, 0, 2, 2, 0};
-    *x2 = (x + factor * dx[dir] + Lx) % Lx;
-    *y2 = (y + factor * dy[dir] + Ly) % Ly;
-    
-    int new_z = z + factor * dz[dir];
-    
-    if (new_z < 2) new_z = 2;
-    if (new_z >= Lz - 2) new_z = Lz - 3;
-    *z2 = new_z;
-}
 __device__ void randn2_gpu(float* x1, float* x2, curandState* state) {
     float V1, V2, S, f;
     while (1) {
@@ -74,17 +60,17 @@ __global__ void axyz_kernel_packed(
     curandState* states,
     float T,
     float* d_AA_, float* d_BB, float* d_transform_array,
-    int* d_ochered_x, int* d_ochered_y, int* d_ochered_z, int* d_ochered_count, int max_ochered_size)
+    int* d_ochered_x, int* d_ochered_y, int* d_ochered_z, int* /*d_ochered_count*/, int max_ochered_size)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= count) return;
 
     axyz_work_item_t item = work_items[idx];
 
-    if (item.center.type == 0) {
-        results[idx].a = {0.0f, 0.0f, 0.0f};
-        return;
-    }
+    // if (item.center.type == 0) {
+    //     results[idx].a = {0.0f, 0.0f, 0.0f};
+    //     return;
+    // }
     
     unsigned short config_ = item.center.config;
     
@@ -101,6 +87,8 @@ __global__ void axyz_kernel_packed(
     float By = item.center.B0.y;
     float Bz = item.center.B0.z;
 
+    int base_ochered_idx = idx * (dir_number + 1);
+
     for (int dir = 0; dir < dir_number; dir++) {
         atom_t neighbor = item.neighbors[dir];
         
@@ -114,7 +102,7 @@ __global__ void axyz_kernel_packed(
         By += BB_p[3] * ax2 + BB_p[4] * ay2 + BB_p[5] * az2;
         Bz += BB_p[6] * ax2 + BB_p[7] * ay2 + BB_p[8] * az2;
 
-        int ochered_idx = atomicAdd(d_ochered_count, 1);
+        int ochered_idx = base_ochered_idx + dir;
         if (ochered_idx < max_ochered_size) {
             coord nb_coords = item.neighbor_coords[dir];
             d_ochered_x[ochered_idx] = nb_coords.x;
@@ -135,7 +123,7 @@ __global__ void axyz_kernel_packed(
     results[idx].a.y = ay_;
     results[idx].a.z = az_;
 
-    int ochered_idx = atomicAdd(d_ochered_count, 1);
+    int ochered_idx = base_ochered_idx + dir_number;
     if (ochered_idx < max_ochered_size) {
         d_ochered_x[ochered_idx] = item.center_coords.x;
         d_ochered_y[ochered_idx] = item.center_coords.y;
@@ -173,7 +161,6 @@ extern "C" void cuda_init(float* host_AA_, float* host_BB, float* host_transform
 
     cudaMalloc(&dev_states, atoms_to_update_size * sizeof(curandState));
     max_ochered_size_allocated = atoms_to_update_size * (dir_number + 1);
-    cudaMalloc(&dev_ochered_count, sizeof(int));
     cudaMalloc(&dev_ochered_x, max_ochered_size_allocated * sizeof(int));
     cudaMalloc(&dev_ochered_y, max_ochered_size_allocated * sizeof(int));
     cudaMalloc(&dev_ochered_z, max_ochered_size_allocated * sizeof(int));
@@ -220,7 +207,6 @@ extern "C" void cuda_cleanup() {
     cudaFree(dev_BB);
     cudaFree(dev_transform_array);
     cudaFree(dev_states);
-    cudaFree(dev_ochered_count);
     cudaFree(dev_ochered_x);
     cudaFree(dev_ochered_y);
     cudaFree(dev_ochered_z);
@@ -251,9 +237,6 @@ extern "C" void cuda_do_many_axyz_packed(
     auto start_time = std::chrono::high_resolution_clock::now();
     cudaMemcpy(dev_work_items, host_work_items, count * sizeof(axyz_work_item_t), cudaMemcpyHostToDevice);
 
-    int zero = 0;
-    cudaMemcpy(dev_ochered_count, &zero, sizeof(int), cudaMemcpyHostToDevice);
-
     int block_size = g_optimal_block_size;
     dim3 block(block_size);
     dim3 grid((count + block.x - 1) / block.x);
@@ -261,15 +244,14 @@ extern "C" void cuda_do_many_axyz_packed(
     axyz_kernel_packed<<<grid, block>>>(
         dev_work_items, dev_results, count, dev_states, T,
         dev_AA_, dev_BB, dev_transform_array,
-        dev_ochered_x, dev_ochered_y, dev_ochered_z, dev_ochered_count, max_ochered_size
+        dev_ochered_x, dev_ochered_y, dev_ochered_z, nullptr, max_ochered_size
     );
     CUDA_CHECK(cudaGetLastError());
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     cudaMemcpy(host_results, dev_results, count * sizeof(axyz_result_t), cudaMemcpyDeviceToHost);
     
-    int ochered_count_gpu;
-    cudaMemcpy(&ochered_count_gpu, dev_ochered_count, sizeof(int), cudaMemcpyDeviceToHost);
+    int ochered_count_gpu = count * (dir_number + 1);
     ochered_count_gpu = min(ochered_count_gpu, max_ochered_size);
     *out_host_ochered_count = ochered_count_gpu;
     if (ochered_count_gpu > 0) {
